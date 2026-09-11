@@ -11,13 +11,19 @@ FROM node:22-alpine
 ENV NODE_ENV=production
 WORKDIR /app
 
-# Install exact production dependencies first (cached independently of src/)
+# Install ALL dependencies first — the Prisma CLI (dev dep) is needed to
+# generate the query client. Pruned to production-only afterwards.
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+COPY prisma ./prisma
+RUN npm ci && npx prisma generate
 
 # Ship the application source (dotenv finds no .env in the image — all
 # configuration is expected as container environment variables)
 COPY src ./src
+
+# Drop dev dependencies (nodemon, prisma CLI). The generated query client
+# lives in node_modules/.prisma, which npm prune leaves untouched.
+RUN npm prune --omit=dev && npm cache clean --force
 
 # Run as the non-root user shipped with the official node image
 USER node

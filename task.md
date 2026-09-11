@@ -5,7 +5,7 @@
 > **Status:** Development — mock-data prototype (backend + web app)
 
 > **Stack note:** Frontend uses **React + Vite** (web), backend uses **Express + mock data**.
-> PostgreSQL/Prisma and TypeScript are planned but the active prototype runs on JS + in-memory mock stores (Supabase/Postgres swap-out points are documented in code).
+> PostgreSQL (docker-compose) and the Prisma schema/seed are in place (`backend/prisma/`) but routes still serve the JS mock stores; TypeScript is planned. Swap-out points are documented in code.
 
 ---
 
@@ -16,8 +16,9 @@
 - [x] Configure `.env` files for backend + frontend (never committed to git)
 - [ ] Setup TypeScript for both frontend and backend *(JS used in the prototype)*
 - [x] Install and configure ESLint/linter (oxlint on frontend; backend deps tracked in package.json)
-- [ ] Setup PostgreSQL database — *replaced with mock in-memory stores*
-- [ ] Setup Prisma ORM and define base schema — *mock stores used instead*
+- [ ] Setup PostgreSQL database — *provisioned in docker-compose (Postgres 16 + volume + healthcheck); app still runs on mock in-memory stores*
+- [x] Setup Prisma ORM and define base schema — `backend/prisma/schema.prisma` (19 models, enums match API strings, money as Int, `@db.Date` calendar dates, Postgres scalar lists) + idempotent seed (`prisma/seed.js`) that loads the mock data preserving existing ids; verified offline via `prisma validate` + `prisma generate` (all 19 model delegates present); backend image updated to generate the client at build and prune the CLI
+- [ ] Swap route services from mock stores to Prisma queries *(after `prisma migrate dev` against the provisioned Postgres + `prisma db seed`)*
 - [x] Configure JWT auth library (jsonwebtoken)
 - [x] Setup folder structure as defined in planning.md
 
@@ -200,7 +201,7 @@
 
 ## Phase 12 — Deployment & Final Polish
 
-- [x] Setup CI/CD pipeline — GitHub Actions (`.github/workflows/ci.yml`): backend `npm ci` + `npm test`, frontend `npm ci` + lint + build; Node 22 LTS with npm cache; runs on push/PR to master
+- [x] Setup CI/CD pipeline — GitHub Actions (`.github/workflows/ci.yml`): backend `npm ci` + `npm test`, frontend `npm ci` + lint + build, Docker image builds for backend + frontend; Node 22 LTS with npm cache; runs on push/PR to master
 - [x] Containerize for deployment — backend image (node:22-alpine, prod deps only, non-root `node` user, `/health` healthcheck), frontend multi-stage image (Vite build → nginx:1.27-alpine with SPA fallback + `/api` proxy so the app is same-origin), `docker-compose.yml` (Postgres 16 + volume + healthcheck provisioned for the Prisma migration, required-secrets wiring), `.env.docker.example` template
 - [ ] Deploy backend to staging environment
 - [ ] Run full test suite on staging

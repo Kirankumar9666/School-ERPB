@@ -1,0 +1,350 @@
+// Prisma schema for the School ERP portal (PostgreSQL).
+//
+// Design rules:
+// - Enum values are lowercase and match the API strings exactly (e.g. role
+//   'teacher', status 'active') so the mock-store -> Prisma swap needs no
+//   value translation.
+// - Money is Int (whole rupees, matching the mock data model).
+// - Calendar dates are @db.Date; timestamps are plain DateTime.
+// - targetRoles / syllabus topics use Postgres scalar lists.
+// - The seed (prisma/seed.js) preserves the existing mock ids (stu-001,
+//   cls-10A, ...) so API URLs stay stable after the swap.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Shared enums (values match the API strings verbatim) ──────────────────
+
+enum Role {
+  admin
+  student
+  parent
+  teacher
+  accountant
+  librarian
+}
+
+enum AccountStatus {
+  active
+  inactive
+}
+
+enum AttendanceStatus {
+  present
+  absent
+  late
+  half_day
+  holiday
+}
+
+enum LeaveType {
+  casual
+  sick
+  earned
+}
+
+enum LeaveStatus {
+  pending
+  approved
+  rejected
+}
+
+enum EmploymentType {
+  Permanent
+  Contract
+  Probation
+  Temporary
+}
+
+enum Gender {
+  Female
+  Male
+  Other
+}
+
+// ─── Identity ───────────────────────────────────────────────────────────────
+
+model User {
+  id           String        @id @default(cuid())
+  username     String        @unique
+  passwordHash String
+  role         Role
+  name         String
+  profilePhoto String?
+  status       AccountStatus @default(active)
+  student      Student?
+  employee     Employee?
+  auditEntries AuditEntry[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+// ─── Academic structure ─────────────────────────────────────────────────────
+
+model Class {
+  id             String               @id // seeded as 'cls-10A' style ids
+  grade          Int // 1..12
+  section        String // single letter, A..D
+  classTeacherId String?
+  classTeacher   Employee?            @relation("ClassTeacher", fields: [classTeacherId], references: [id])
+  students       Student[]
+  assignments    TeachingAssignment[]
+  timetable      TimetablePeriod[]
+  syllabus       SyllabusEntry[]
+  exams          Exam[]
+
+  @@unique([grade, section])
+}
+
+model TeachingAssignment {
+  id             String   @id @default(cuid())
+  employeeId     String
+  employee       Employee @relation(fields: [employeeId], references: [id])
+  classId        String
+  class          Class    @relation(fields: [classId], references: [id])
+  subject        String
+  room           String?
+  isClassTeacher Boolean  @default(false)
+
+  @@unique([employeeId, classId])
+}
+
+// ─── People ─────────────────────────────────────────────────────────────────
+
+model Student {
+  id              String   @id // seeded as 'stu-001' style ids
+  userId          String?  @unique
+  user            User?    @relation(fields: [userId], references: [id])
+  name            String
+  photo           String?
+  classId         String
+  class           Class    @relation(fields: [classId], references: [id])
+  admissionYear   Int?
+  rollNumber      String?  @unique
+  feeTotal        Int?
+  feeDues         Int?
+  parentName      String?
+  guardianContact String?
+  address         String?
+  bloodGroup      String?
+  dob             DateTime? @db.Date
+  attendance      StudentAttendance[]
+  marks           MarksEntry[]
+  achievements    Achievement[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([classId])
+}
+
+model Employee {
+  id                 String          @id // seeded as 'emp-001' style ids
+  userId             String?         @unique
+  user               User?           @relation(fields: [userId], references: [id])
+  employeeId         String?         @unique
+  name               String
+  photo              String?
+  gender             Gender?
+  dob                DateTime?       @db.Date
+  bloodGroup         String?
+  mobile             String?
+  email              String?
+  address            String?
+  emergencyContact   String?
+  department         String?
+  designation        String?
+  role               Role?
+  qualification      String?
+  dateOfJoining      DateTime?       @db.Date
+  experience         String?
+  reportingPrincipal String?
+  employmentType     EmploymentType?
+  status             AccountStatus   @default(active)
+  classesTaught      TeachingAssignment[]
+  classesInCharge    Class[]         @relation("ClassTeacher")
+  attendance         EmployeeAttendance[]
+  leaveBalance       LeaveBalance?
+  leaveRequests      LeaveRequest[]
+  payroll            PayrollRecord[]
+  documents          EmployeeDocument[]
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+}
+
+// ─── Attendance ─────────────────────────────────────────────────────────────
+
+model StudentAttendance {
+  id        String           @id @default(cuid())
+  studentId String
+  student   Student          @relation(fields: [studentId], references: [id])
+  date      DateTime         @db.Date
+  status    AttendanceStatus
+
+  @@unique([studentId, date])
+  @@index([date])
+}
+
+model EmployeeAttendance {
+  id           String           @id @default(cuid())
+  employeeId   String
+  employee     Employee         @relation(fields: [employeeId], references: [id])
+  date         DateTime         @db.Date
+  status       AttendanceStatus
+  workingHours Float?
+
+  @@unique([employeeId, date])
+  @@index([date])
+}
+
+// ─── Marks ──────────────────────────────────────────────────────────────────
+
+model Exam {
+  id      String       @id // seeded as 'exam-001' style ids
+  classId String
+  class   Class        @relation(fields: [classId], references: [id])
+  name    String
+  date    DateTime     @db.Date
+  marks   MarksEntry[]
+
+  @@unique([classId, name])
+}
+
+model MarksEntry {
+  id        String  @id @default(cuid())
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id])
+  examId    String
+  exam      Exam    @relation(fields: [examId], references: [id])
+  subject   String
+  maxMarks  Int
+  obtained  Int
+
+  @@unique([studentId, examId, subject])
+  @@index([examId])
+}
+
+// ─── Timetable / syllabus ───────────────────────────────────────────────────
+
+model TimetablePeriod {
+  id          String   @id @default(cuid())
+  classId     String
+  class       Class    @relation(fields: [classId], references: [id])
+  period      Int
+  timeStart   String
+  timeEnd     String
+  subject     String
+  teacherName String
+  room        String?
+
+  @@unique([classId, period])
+}
+
+model SyllabusEntry {
+  id               String   @id @default(cuid())
+  classId          String
+  class            Class    @relation(fields: [classId], references: [id])
+  subject          String
+  topics           String[]
+  completedPercent Int
+
+  @@unique([classId, subject])
+}
+
+// ─── Leaves / payroll ───────────────────────────────────────────────────────
+
+model LeaveBalance {
+  employeeId String   @id
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  casual     Int      @default(0)
+  sick       Int      @default(0)
+  earned     Int      @default(0)
+}
+
+model LeaveRequest {
+  id         String      @id @default(cuid()) // seeded as 'lv-001' style ids
+  employeeId String
+  employee   Employee    @relation(fields: [employeeId], references: [id])
+  type       LeaveType
+  fromDate   DateTime    @db.Date
+  toDate     DateTime    @db.Date
+  reason     String
+  status     LeaveStatus @default(pending)
+  appliedAt  DateTime    @default(now())
+  decidedAt  DateTime?
+
+  @@index([status])
+}
+
+model PayrollRecord {
+  id                 String    @id @default(cuid())
+  employeeId         String
+  employee           Employee  @relation(fields: [employeeId], references: [id])
+  month              String // 'YYYY-MM'
+  basicPay           Int
+  hra                Int       @default(0)
+  transportAllowance Int       @default(0)
+  medicalAllowance   Int       @default(0)
+  providentFund      Int       @default(0)
+  professionalTax    Int       @default(0)
+  tds                Int       @default(0)
+  netSalary          Int
+  paidOn             DateTime? @db.Date
+
+  @@unique([employeeId, month])
+}
+
+// ─── Documents / announcements / holidays / achievements ───────────────────
+
+model EmployeeDocument {
+  id         String   @id @default(cuid()) // seeded as 'doc-001' style ids
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  type       String
+  fileName   String
+  uploadedAt DateTime @default(now())
+}
+
+model Announcement {
+  id          String   @id @default(cuid()) // seeded as 'ann-001' style ids
+  title       String
+  body        String
+  targetRoles Role[]
+  category    String?
+  createdAt   DateTime @default(now())
+}
+
+model Holiday {
+  id   String   @id @default(cuid()) // seeded as 'hol-001' style ids
+  date DateTime @unique @db.Date
+  name String
+}
+
+model Achievement {
+  id          String   @id @default(cuid()) // seeded as 'ach-001' style ids
+  studentId   String
+  student     Student  @relation(fields: [studentId], references: [id])
+  title       String
+  description String
+  date        DateTime @db.Date
+  type        String // 'academic' | 'sports' | ...
+}
+
+// ─── Audit trail ────────────────────────────────────────────────────────────
+
+model AuditEntry {
+  id          String   @id @default(cuid())
+  actorUserId String?
+  actor       User?    @relation(fields: [actorUserId], references: [id])
+  entityType  String
+  entityId    String?
+  message     String
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+}

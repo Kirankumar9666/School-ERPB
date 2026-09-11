@@ -45,3 +45,14 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+
+  # Builds both deployment images on every push/PR so the Dockerfiles and
+  # compose wiring stay continuously validated (no registry push here —
+  # publishing is a deliberate release step, not CI).
+  docker:
+    name: Docker — build images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t school-erp-backend ./backend
+      - run: docker build -t school-erp-frontend ./frontend
