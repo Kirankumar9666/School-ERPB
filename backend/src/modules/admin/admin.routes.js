@@ -373,6 +373,9 @@ const syllabusSchema = z.object({
   completedPercent: z.number().min(0).max(100),
 });
 
+/** GET /api/v1/admin/syllabus — all class syllabus records */
+router.get('/syllabus', (req, res) => sendSuccess(res, MOCK_SYLLABUS));
+
 /** POST /api/v1/admin/syllabus */
 router.post('/syllabus', (req, res) => {
   const parsed = syllabusSchema.safeParse(req.body);
@@ -397,6 +400,17 @@ const achievementSchema = z.object({
   description: z.string().min(10).max(500),
   date: dateStr,
   type: z.enum(['academic', 'sports', 'cultural', 'other']),
+});
+
+/** GET /api/v1/admin/achievements — flattened list with student names */
+router.get('/achievements', (req, res) => {
+  const list = [];
+  Object.entries(MOCK_ACHIEVEMENTS).forEach(([studentId, items]) => {
+    const student = MOCK_STUDENTS.find((s) => s.id === studentId);
+    items.forEach((a) => list.push({ ...a, studentId, studentName: student?.name || studentId }));
+  });
+  list.sort((a, b) => (a.date < b.date ? 1 : -1));
+  return sendSuccess(res, list);
 });
 
 /** POST /api/v1/admin/achievements */
@@ -446,7 +460,35 @@ router.post('/employees/:id/documents', (req, res) => {
   return sendSuccess(res, newDoc, 'Document uploaded', 201);
 });
 
+/** GET /api/v1/admin/documents — flattened list with employee names */
+router.get('/documents', (req, res) => {
+  const list = [];
+  Object.entries(MOCK_DOCUMENTS).forEach(([employeeId, items]) => {
+    const employee = MOCK_EMPLOYEES.find((e) => e.id === employeeId);
+    items.forEach((d) => list.push({ ...d, employeeId, employeeName: employee?.name || employeeId }));
+  });
+  list.sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1));
+  return sendSuccess(res, list);
+});
+
+/** DELETE /api/v1/admin/documents/:id — remove a document record */
+router.delete('/documents/:id', (req, res) => {
+  let removed = null;
+  Object.keys(MOCK_DOCUMENTS).forEach((employeeId) => {
+    const idx = MOCK_DOCUMENTS[employeeId].findIndex((d) => d.id === req.params.id);
+    if (idx !== -1) removed = MOCK_DOCUMENTS[employeeId].splice(idx, 1)[0];
+  });
+  if (!removed) return sendError(res, 'Document not found', 404, 'NOT_FOUND');
+  return sendSuccess(res, { id: removed.id }, 'Document deleted');
+});
+
 /* ---------- Users / Password reset ---------- */
+
+/** GET /api/v1/admin/users — sanitized user list (never includes password hashes) */
+router.get('/users', (req, res) => {
+  const users = MOCK_USERS.map(({ passwordHash, ...safe }) => safe);
+  return sendSuccess(res, users);
+});
 
 const resetPasswordSchema = z.object({
   newPassword: z.string().min(8, 'Password must be at least 8 characters'),

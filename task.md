@@ -155,10 +155,10 @@
 - [x] Announcements editor
 - [x] Holiday management
 - [x] Leave approval screen
-- [~] Syllabus upload screen — *backend API ready, admin UI pending*
-- [~] Achievements management — *backend API ready, admin UI pending*
-- [~] Document upload screen — *backend API ready, admin UI pending*
-- [~] Password reset screen — *backend API ready, admin UI pending*
+- [x] Syllabus upload screen — `POST/GET /admin/syllabus` + `AdminSyllabus.jsx` (class select, upsert, progress bars)
+- [x] Achievements management — `GET/POST/DELETE /admin/achievements` + `AdminAchievements.jsx`
+- [x] Document upload screen — `GET/DELETE /admin/documents` + `AdminDocuments.jsx` (per-employee records)
+- [x] Password reset screen — `GET /admin/users` (sanitized) + `AdminUsers.jsx` (modal reset flow)
 
 ---
 
@@ -215,7 +215,7 @@
 | 6     | Done        | Full admin API set added         |
 | 7     | Done        | All student screens              |
 | 8     | Done        | All employee screens             |
-| 9     | Mostly Done | Core admin screens; syllabus/achievements/documents/password-reset UIs pending |
+| 9     | Done        | All admin screens incl. syllabus/achievements/documents/users |
 | 10    | Not Started | Security hardening               |
 | 11    | Not Started | Testing (smoke test written & passing ad-hoc) |
 | 12    | Not Started | Deployment                       |

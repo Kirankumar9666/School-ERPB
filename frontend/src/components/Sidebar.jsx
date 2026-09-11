@@ -4,7 +4,7 @@ import { ROLES, EMPLOYEE_ROLES } from '../constants/roles';
 import {
   LayoutDashboard, User, CalendarDays, BookOpen, ClipboardList,
   Bell, Umbrella, DollarSign, Clock, Users, FileText,
-  LogOut, BookMarked, Trophy, PartyPopper
+  LogOut, BookMarked, Trophy, PartyPopper, Upload, KeyRound, FolderUp
 } from 'lucide-react';
 
 /** Navigation config per role */
@@ -78,11 +78,25 @@ NAV_CONFIG[ROLES.ADMIN] = {
       ],
     },
     {
+      title: 'Records',
+      items: [
+        { to: '/admin/syllabus',     icon: <Upload size={16} />,          label: 'Syllabus' },
+        { to: '/admin/achievements', icon: <Trophy size={16} />,          label: 'Achievements' },
+        { to: '/admin/documents',    icon: <FolderUp size={16} />,        label: 'Documents' },
+      ],
+    },
+    {
       title: 'Communications',
       items: [
         { to: '/admin/announcements',icon: <Bell size={16} />,            label: 'Announcements' },
         { to: '/admin/holidays',     icon: <PartyPopper size={16} />,     label: 'Holidays' },
         { to: '/admin/leaves',       icon: <Umbrella size={16} />,        label: 'Leave Approval' },
+      ],
+    },
+    {
+      title: 'Security',
+      items: [
+        { to: '/admin/users',        icon: <KeyRound size={16} />,        label: 'User Accounts' },
       ],
     },
   ],

@@ -40,6 +40,10 @@ import AdminTimetable from './pages/admin/AdminTimetable'
 import AdminAnnouncements from './pages/admin/AdminAnnouncements'
 import AdminHolidays from './pages/admin/AdminHolidays'
 import AdminLeaves from './pages/admin/AdminLeaves'
+import AdminSyllabus from './pages/admin/AdminSyllabus'
+import AdminAchievements from './pages/admin/AdminAchievements'
+import AdminDocuments from './pages/admin/AdminDocuments'
+import AdminUsers from './pages/admin/AdminUsers'
 
 /** Map role → home path (single source of truth) */
 const ROLE_HOME = {
@@ -111,6 +115,10 @@ export default function App() {
             <Route path="/admin/announcements" element={<AdminAnnouncements />} />
             <Route path="/admin/holidays" element={<AdminHolidays />} />
             <Route path="/admin/leaves" element={<AdminLeaves />} />
+            <Route path="/admin/syllabus" element={<AdminSyllabus />} />
+            <Route path="/admin/achievements" element={<AdminAchievements />} />
+            <Route path="/admin/documents" element={<AdminDocuments />} />
+            <Route path="/admin/users" element={<AdminUsers />} />
           </Route>
 
           <Route path="*" element={<RootRedirect />} />
