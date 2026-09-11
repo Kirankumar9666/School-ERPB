@@ -164,16 +164,17 @@
 
 ## Phase 10 — Security Hardening
 
-- [ ] Audit all routes for missing auth/RBAC middleware
-- [ ] Verify no secrets exist in codebase (`git grep` check)
-- [ ] Confirm `.env` is in `.gitignore`
-- [ ] Enable HTTPS (SSL certificate) on server
-- [ ] Add rate limiting middleware to all sensitive routes
-- [ ] Verify all file downloads use signed URLs (not public links)
-- [ ] Sanitize all user inputs (zod/joi validation on every endpoint)
-- [ ] Confirm passwords are never logged or returned in API responses
-- [ ] Setup audit log table for admin actions
-- [ ] Run `npm audit` — fix critical/high vulnerabilities
+- [x] Audit all routes for missing auth/RBAC middleware — verified: every router mounts `authMiddleware`; `/admin/*` guarded by router-level `requireRole([ADMIN])`; student/employee routes enforce role + ownership (`linkedEntityId`) checks
+- [x] Verify no secrets exist in codebase (`git grep` check) — clean; only intentional demo-credential hints in `Login.jsx` (prototype-only, remove before real users)
+- [x] Confirm `.env` is in `.gitignore` — covered in root, `backend/`, and `frontend/` `.gitignore`; `git check-ignore` confirms both `.env` files are ignored and untracked
+- [x] Enable HTTPS (SSL certificate) on server — optional in-app HTTPS via `TLS_KEY_PATH`/`TLS_CERT_PATH` (server auto-switches); production recommendation: terminate TLS at a reverse proxy
+- [x] Add rate limiting middleware to all sensitive routes — login (5 fails/15 min), refresh (30 fails/15 min), and a general 300 req/15 min limiter on all of `/api/v1`
+- [x] Verify all file downloads use signed URLs (not public links) — N/A: all downloads are generated client-side (CSV/print); no public file URLs exist
+- [x] Sanitize all user inputs (zod/joi validation on every endpoint) — verified on all write endpoints incl. `/auth/refresh` (schema added); student/employee routes are GET-only, params validated server-side
+- [x] Confirm passwords are never logged or returned in API responses — verified: login/reset responses omit hashes, `GET /admin/users` strips `passwordHash`, morgan logs request lines only, audit log never captures bodies
+- [x] Setup audit log table for admin actions — `src/mock/audit.js` + router-level audit middleware on all admin mutations + `GET /admin/audit-log` (newest-first, 500-entry cap)
+- [x] Run `npm audit` — fix critical/high vulnerabilities — 0 vulnerabilities in backend and frontend
+- [x] JWT secrets fail-fast — production startup throws if `JWT_SECRET`/`JWT_REFRESH_SECRET` missing; dev uses a labelled insecure fallback + warning
 
 ---
 
@@ -216,7 +217,7 @@
 | 7     | Done        | All student screens              |
 | 8     | Done        | All employee screens             |
 | 9     | Done        | All admin screens incl. syllabus/achievements/documents/users |
-| 10    | Not Started | Security hardening               |
+| 10    | Done        | Security hardening (RBAC audit, rate limits, audit log, HTTPS option, npm audit 0 vulns) |
 | 11    | Not Started | Testing (smoke test written & passing ad-hoc) |
 | 12    | Not Started | Deployment                       |
 

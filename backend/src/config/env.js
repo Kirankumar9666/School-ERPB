@@ -4,14 +4,32 @@
  */
 require('dotenv').config();
 
+const nodeEnv = process.env.NODE_ENV || 'development';
+const isProd = nodeEnv === 'production';
+
+/**
+ * JWT secrets must be provided explicitly. In production a missing secret is a
+ * fatal startup error (fail fast) — in development we fall back to a clearly
+ * labelled insecure value so the app still runs out of the box.
+ */
+function resolveJwtSecret(envVar, devFallback) {
+  const value = process.env[envVar];
+  if (value) return value;
+  if (isProd) {
+    throw new Error(`[config] ${envVar} is required in production. Set it in the environment or backend/.env (see .env.example).`);
+  }
+  console.warn(`[config] WARNING: ${envVar} is not set — using an INSECURE development fallback. Never ship this to production.`);
+  return devFallback;
+}
+
 const config = {
   port: process.env.PORT || 5000,
-  nodeEnv: process.env.NODE_ENV || 'development',
+  nodeEnv,
 
   jwt: {
-    secret: process.env.JWT_SECRET,
+    secret: resolveJwtSecret('JWT_SECRET', 'dev-only-insecure-jwt-secret-change-me'),
     expiresIn: process.env.JWT_EXPIRES_IN || '15m',
-    refreshSecret: process.env.JWT_REFRESH_SECRET,
+    refreshSecret: resolveJwtSecret('JWT_REFRESH_SECRET', 'dev-only-insecure-refresh-secret-change-me'),
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
   },
 
@@ -22,6 +40,12 @@ const config = {
 
   cors: {
     allowedOrigins: (process.env.ALLOWED_ORIGINS || 'http://localhost:5173').split(','),
+  },
+
+  /** Optional TLS termination in-app (typically handled by a reverse proxy instead) */
+  tls: {
+    keyPath: process.env.TLS_KEY_PATH,
+    certPath: process.env.TLS_CERT_PATH,
   },
 
   rateLimit: {

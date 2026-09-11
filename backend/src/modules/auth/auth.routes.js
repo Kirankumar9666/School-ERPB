@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 const { z } = require('zod');
 const config = require('../../config/env');
 const { MOCK_USERS } = require('../../mock/users');
-const { loginRateLimiter } = require('../../middleware/rateLimiter.middleware');
+const { loginRateLimiter, refreshLimiter } = require('../../middleware/rateLimiter.middleware');
 const authMiddleware = require('../../middleware/auth.middleware');
 const { requireRole } = require('../../middleware/role.middleware');
 const { ROLES } = require('../../constants/roles');
@@ -63,17 +63,25 @@ router.post('/login', loginRateLimiter, async (req, res) => {
 /**
  * POST /api/v1/auth/refresh
  * Issues a new access token using a valid refresh token.
+ * Rate limited (failed attempts only) and zod-validated.
  */
-router.post('/refresh', (req, res) => {
-  const { refreshToken } = req.body;
-  if (!refreshToken) {
-    return sendError(res, 'Refresh token required', 400, 'BAD_REQUEST');
+const refreshSchema = z.object({
+  refreshToken: z.string().min(10, 'Refresh token required'),
+});
+
+router.post('/refresh', refreshLimiter, (req, res) => {
+  const parsed = refreshSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return sendValidationError(res, parsed.error.flatten().fieldErrors);
   }
 
   try {
-    const decoded = jwt.verify(refreshToken, config.jwt.refreshSecret);
+    const decoded = jwt.verify(parsed.data.refreshToken, config.jwt.refreshSecret);
     const user = MOCK_USERS.find((u) => u.id === decoded.id);
     if (!user) return sendError(res, 'User not found', 404, 'NOT_FOUND');
+    if (user.status !== 'active') {
+      return sendError(res, 'Account is no longer active', 403, 'ACCOUNT_INACTIVE');
+    }
 
     const payload = { id: user.id, username: user.username, role: user.role, linkedEntityId: user.linkedEntityId };
     const newAccessToken = jwt.sign(payload, config.jwt.secret, { expiresIn: config.jwt.expiresIn });

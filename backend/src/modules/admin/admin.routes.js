@@ -9,10 +9,31 @@ const { MOCK_USERS } = require('../../mock/users');
 const { MOCK_STUDENTS, MOCK_MARKS, MOCK_ACHIEVEMENTS, MOCK_ATTENDANCE_STUDENT } = require('../../mock/students');
 const { MOCK_EMPLOYEES, MOCK_LEAVES, MOCK_DOCUMENTS, MOCK_ATTENDANCE_EMPLOYEE } = require('../../mock/employees');
 const { MOCK_ANNOUNCEMENTS, MOCK_HOLIDAYS, MOCK_TIMETABLE, MOCK_SYLLABUS } = require('../../mock/school');
+const { MOCK_AUDIT_LOG, recordAudit } = require('../../mock/audit');
 
 const router = express.Router();
 router.use(authMiddleware);
 router.use(requireRole([ROLES.ADMIN])); // All admin routes require ADMIN role
+
+/* ---------- Audit trail ---------- */
+/**
+ * Every successful mutating request (POST/PUT/PATCH/DELETE) on any admin route
+ * is recorded to the audit log. Bodies are never captured, so passwords can
+ * never leak into the log. GET requests are not audited.
+ */
+router.use((req, res, next) => {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
+  res.on('finish', () => {
+    if (res.statusCode < 400) {
+      recordAudit(req, {
+        entityType: 'admin-resource',
+        entityId: req.params.id || null,
+        message: `${req.method} ${req.originalUrl}`,
+      });
+    }
+  });
+  next();
+});
 
 /* ---------- helpers ---------- */
 
@@ -505,6 +526,11 @@ router.put('/users/:id/reset-password', async (req, res) => {
   user.passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
   return sendSuccess(res, null, 'Password reset successfully');
 });
+
+/* ---------- Audit log ---------- */
+
+/** GET /api/v1/admin/audit-log — newest-first trail of admin mutations */
+router.get('/audit-log', (req, res) => sendSuccess(res, MOCK_AUDIT_LOG));
 
 /* ---------- Reports ---------- */
 

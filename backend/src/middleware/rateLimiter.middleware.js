@@ -18,4 +18,37 @@ const loginRateLimiter = rateLimit({
   skipSuccessfulRequests: true, // Only count failed attempts
 });
 
-module.exports = { loginRateLimiter };
+/**
+ * General limiter applied to every /api/v1 request.
+ * Generous ceiling — protects against abuse/DoS without disturbing normal use.
+ */
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many requests. Please slow down.',
+    code: 'RATE_LIMITED',
+  },
+});
+
+/**
+ * Limiter for the refresh endpoint (stricter than general, looser than login).
+ * Only failed/invalid refreshes count against the limit.
+ */
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: {
+    success: false,
+    message: 'Too many refresh attempts. Please log in again in a few minutes.',
+    code: 'RATE_LIMITED',
+  },
+});
+
+module.exports = { loginRateLimiter, apiLimiter, refreshLimiter };
