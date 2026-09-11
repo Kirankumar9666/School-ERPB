@@ -200,7 +200,7 @@
 
 ## Phase 12 — Deployment & Final Polish
 
-- [ ] Setup CI/CD pipeline
+- [x] Setup CI/CD pipeline — GitHub Actions (`.github/workflows/ci.yml`): backend `npm ci` + `npm test`, frontend `npm ci` + lint + build; Node 22 LTS with npm cache; runs on push/PR to master
 - [ ] Deploy backend to staging environment
 - [ ] Run full test suite on staging
 - [ ] Configure production environment variables
@@ -224,7 +224,7 @@
 | 9     | Done        | All admin screens incl. syllabus/achievements/documents/users |
 | 10    | Done        | Security hardening (RBAC audit, rate limits, audit log, HTTPS option, npm audit 0 vulns) |
 | 11    | Done        | 77 tests passing (`npm test`): unit + integration + E2E; device UI testing deferred |
-| 12    | Not Started | Deployment                       |
+| 12    | In Progress | CI pipeline done (GitHub Actions); deployment pending |
 
 ---
 
