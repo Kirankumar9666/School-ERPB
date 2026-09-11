@@ -101,6 +101,8 @@
 ## Phase 6 — Admin Module (Backend APIs)
 
 - [x] Student CRUD: `POST/PUT/DELETE /api/v1/admin/students`
+- [x] Class-grouped summaries: `GET /api/v1/admin/students/by-class` (derived aggregation over students + marks: counts, fee dues, avg/top %)
+- [x] Bulk admissions: `POST /api/v1/admin/students/bulk` — CSV/XLSX parsed & validated server-side (multer + exceljs + csv-parse), atomic per-row/per-column errors, auto roll numbers per class/section, 200-row cap; JSON fallback kept
 - [x] Employee CRUD: `POST/PUT/DELETE /api/v1/admin/employees`
 - [x] Attendance management: `POST /api/v1/admin/attendance`
 - [x] Marks upload: `POST /api/v1/admin/marks`
@@ -185,13 +187,14 @@
 - [x] Integration tests: student API endpoints — `tests/students.api.test.js` (15 tests: ownership 403s, 404s, attendance with computed summary, marks, timetable, achievements, syllabus)
 - [x] Integration tests: employee API endpoints — `tests/employees.api.test.js` (15 tests: own/other profile access, attendance summary, leaves, payroll month filter, timetable by teacher, documents, apply-leave happy/validation/forbidden paths)
 - [x] Integration tests: admin CRUD operations — `tests/admin.api.test.js` (20 tests: students/employees CRUD, attendance marking + upsert verification, marks publish, announcements, holidays, leaves approve/reject, users, audit log, RBAC denials)
+- [x] Integration tests: bulk student upload — `tests/students.bulk.test.js` (9 tests: CSV/XLSX server-side parsing, header enforcement, per-row/per-column atomic validation, roll-number auto-generation, by-class summary re-read, RBAC denial)
 - [x] E2E tests: login flow (all roles) — `tests/e2e.test.js` (admin/teacher/accountant/student login → role-correct data)
 - [x] E2E tests: student views data correctly — student journey: profile → attendance (summary) → marks → timetable → announcements
 - [x] E2E tests: employee leave apply + admin approve flow — apply → pending visible → admin approve → `approved`; reject path → `rejected`
 - [ ] Manual UI testing on Android — deferred (responsive CSS done; needs a real device/emulator)
 - [ ] Manual UI testing on iOS — deferred (needs a real device/simulator)
 
-**Result: 77 tests, 77 passing, 0 failures** — run with `npm test` (Node built-in test runner, zero extra dependencies). Testability refactor: `src/server.js` is now the entry point (`app.js` exports the app only) and attendance-summary logic was extracted to `src/utils/attendance.js` and wired into both attendance endpoints.
+**Result: 86 tests, 86 passing, 0 failures** — run with `npm test` (Node built-in test runner, zero extra dependencies). Testability refactor: `src/server.js` is now the entry point (`app.js` exports the app only) and attendance-summary logic was extracted to `src/utils/attendance.js` and wired into both attendance endpoints.
 
 ---
 

@@ -39,7 +39,15 @@ const config = {
   },
 
   cors: {
-    allowedOrigins: (process.env.ALLOWED_ORIGINS || 'http://localhost:5173').split(','),
+    // Comma-separated list. Dev default covers Vite's primary port (5173),
+    // its auto-increment fallback (5174, used when 5173 is busy) and the
+    // production-build preview port (4173). Entries are trimmed so
+    // "a, b" works too.
+    allowedOrigins: (process.env.ALLOWED_ORIGINS
+      || 'http://localhost:5173,http://localhost:5174,http://localhost:4173')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
   },
 
   /** Optional TLS termination in-app (typically handled by a reverse proxy instead) */

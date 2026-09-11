@@ -1,6 +1,9 @@
 const express = require('express');
 const { z } = require('zod');
 const bcrypt = require('bcryptjs');
+const multer = require('multer');
+const ExcelJS = require('exceljs');
+const { parse: parseCsv } = require('csv-parse/sync');
 const authMiddleware = require('../../middleware/auth.middleware');
 const { requireRole } = require('../../middleware/role.middleware');
 const { ROLES, EMPLOYEE_ROLES } = require('../../constants/roles');
@@ -62,6 +65,269 @@ const studentSchema = z.object({
 
 /** GET /api/v1/admin/students — list all students */
 router.get('/students', (req, res) => sendSuccess(res, MOCK_STUDENTS));
+
+/* ---------- Class summaries (derived aggregation over students + marks) ---------- */
+
+/**
+ * Normalize one student's class key and human label.
+ * "10"/"A" → { key: "10-A", label: "10 - Class A" }.
+ * Trims whitespace; missing section defaults to no suffix.
+ */
+const classKeyLabel = (student) => {
+  const cls = String(student.class ?? '').trim();
+  const section = String(student.section ?? '').trim().toUpperCase();
+  const key = section ? `${cls}-${section}` : cls;
+  const label = section ? `${cls} - Class ${section}` : cls;
+  return { key, label };
+};
+
+/**
+ * Overall percent (0–100) for one student across all their exams,
+ * or null when the student has no marks yet (excluded from top/avg).
+ */
+const studentOverallPercent = (marksMap, studentId) => {
+  const exams = marksMap?.[studentId] || [];
+  let obtained = 0;
+  let max = 0;
+  exams.forEach((exam) => {
+    (exam.subjects || []).forEach((sub) => {
+      obtained += Number(sub.obtained) || 0;
+      max += Number(sub.maxMarks) || 0;
+    });
+  });
+  if (max <= 0) return null;
+  return (obtained / max) * 100;
+};
+
+/**
+ * GET /api/v1/admin/students/by-class — students grouped per class with aggregates.
+ * Everything is derived live via groupBy + reduce from MOCK_STUDENTS (+ MOCK_MARKS),
+ * so rows update automatically on any add/edit/delete. Query ?q= filters the
+ * underlying students by name/roll/class before grouping.
+ */
+router.get('/students/by-class', (req, res) => {
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const pool = q
+    ? MOCK_STUDENTS.filter((s) =>
+      [s.name, s.rollNumber, s.class, s.section].some((v) =>
+        String(v ?? '').toLowerCase().includes(q)))
+    : MOCK_STUDENTS;
+
+  const groups = new Map();
+  pool.forEach((s) => {
+    const { key, label } = classKeyLabel(s);
+    if (!groups.has(key)) groups.set(key, { key, label, studentIds: [], members: [] });
+    const g = groups.get(key);
+    g.studentIds.push(s.id);
+    g.members.push(s);
+  });
+
+  const rows = [...groups.values()].map((g) => {
+    const totalStudents = g.members.length;
+    const feeDues = g.members.reduce((sum, s) => sum + (Number(s.feeDues) || 0), 0);
+    const percents = g.members
+      .map((m) => studentOverallPercent(MOCK_MARKS, m.id))
+      .filter((p) => p !== null);
+    const topScore = percents.length ? Math.round(Math.max(...percents)) : null;
+    const avgMarks = percents.length
+      ? Math.round(percents.reduce((a, b) => a + b, 0) / percents.length)
+      : null;
+    return {
+      key: g.key,
+      class: g.label,
+      totalStudents,
+      feeDues,
+      topScore,
+      avgMarks,
+      markedCount: percents.length,
+      studentIds: g.studentIds,
+    };
+  });
+
+  // Numeric classes first (9 before 10), then section A→B→C
+  rows.sort((a, b) => {
+    const na = parseInt(a.key, 10);
+    const nb = parseInt(b.key, 10);
+    if (!Number.isNaN(na) && !Number.isNaN(nb) && na !== nb) return na - nb;
+    return a.key.localeCompare(b.key);
+  });
+
+  return sendSuccess(res, rows);
+});
+
+/* ---------- Students bulk upload (CSV / XLSX, parsed server-side) ---------- */
+
+/** Multer keeps the upload in memory — no temp files to clean up. 5 MB cap. */
+const bulkUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+/** Bulk-upload columns — header row required, in this exact order (RollNumber optional) */
+const BULK_COLUMNS = ['Name', 'Class', 'Section', 'RollNumber', 'ParentGuardian', 'Contact', 'FeeDues'];
+
+/** Per class/section, the latest year seen in that group's roll numbers */
+const latestRollYear = (students) => {
+  const years = students
+    .map((s) => (/^STU-(\d{4})-(\d+)$/.exec(String(s.rollNumber ?? '').trim()) || [])[1])
+    .filter(Boolean);
+  return years.length ? years.sort().pop() : String(new Date().getFullYear());
+};
+
+/** Derive the next available roll number within one class/section group */
+const nextRollNumber = (students, year) => {
+  const maxNum = students.reduce((max, s) => {
+    const m = new RegExp(`^STU-${year}-(\\d+)$`).exec(String(s.rollNumber ?? '').trim());
+    return m ? Math.max(max, parseInt(m[1], 10)) : max;
+  }, 0);
+  return `STU-${year}-${String(maxNum + 1).padStart(3, '0')}`;
+};
+
+/**
+ * POST /api/v1/admin/students/bulk — create many students in one call.
+ * Prefers multipart/form-data with a `file` field (.csv / .xlsx) parsed and
+ * validated server-side, so a modified frontend can't bypass validation.
+ * Also accepts { students: [...] } JSON for programmatic use (same rules).
+ * Expected columns (header row required, exact order):
+ *   Name, Class, Section, RollNumber, ParentGuardian, Contact, FeeDues
+ * RollNumber is optional — blank cells get the next available roll number for
+ * that class/section, derived from the existing students' roll numbers.
+ * Atomic: every row is validated first; if ANY row is invalid nothing is
+ * created and the response lists the failing row numbers and columns.
+ */
+router.post('/students/bulk', bulkUpload.single('file'), async (req, res) => {
+  const entries = [];
+  const errors = {};
+
+  /* ---------- 1. Obtain rows (uploaded file or JSON fallback) ---------- */
+  if (req.file) {
+    const originalName = String(req.file.originalname || '').toLowerCase();
+    if (!originalName.endsWith('.csv') && !originalName.endsWith('.xlsx')) {
+      return sendError(res, 'Unsupported file type — upload a .csv or .xlsx file', 400, 'BAD_REQUEST');
+    }
+
+    let records;
+    try {
+      if (originalName.endsWith('.csv')) {
+        records = parseCsv(req.file.buffer, {
+          bom: true,
+          trim: true,
+          skip_empty_lines: true,
+          relax_column_count: true, // ragged rows come through so we can report them per-row
+        });
+      } else {
+        const book = new ExcelJS.Workbook();
+        await book.xlsx.load(req.file.buffer);
+        const sheet = book.worksheets[0];
+        if (!sheet) return sendError(res, 'The workbook has no sheets', 400, 'BAD_REQUEST');
+        records = [];
+        sheet.eachRow((row) => {
+          const cells = [];
+          row.eachCell({ includeEmpty: true }, (cell, col) => { cells[col - 1] = cell.text ?? ''; });
+          records.push(cells);
+        });
+      }
+    } catch (err) {
+      return sendError(res, `Could not parse the file: ${err.message}`, 400, 'BAD_REQUEST');
+    }
+
+    /* Header row: required, exact column order */
+    const header = (records[0] || []).map((h) => String(h ?? '').trim());
+    const headerOk = header.length === BULK_COLUMNS.length
+      && header.every((h, i) => h.toLowerCase() === BULK_COLUMNS[i].toLowerCase());
+    if (!headerOk) {
+      return sendValidationError(res, { file: `Header row must be exactly: ${BULK_COLUMNS.join(', ')}` });
+    }
+
+    /* Drop fully-empty data rows and enforce the 200-row limit */
+    const dataRows = records.slice(1)
+      .map((cells) => cells.map((c) => (c == null ? '' : String(c).trim())))
+      .filter((cells) => cells.some((c) => c !== ''));
+    if (dataRows.length === 0) {
+      return sendValidationError(res, { file: 'The file has no student rows below the header' });
+    }
+    if (dataRows.length > 200) {
+      return sendValidationError(res, { file: `Bulk upload is limited to 200 students per file (got ${dataRows.length})` });
+    }
+
+    dataRows.forEach((cells, i) => {
+      const rowNum = i + 2; // header is row 1
+      if (cells.length !== BULK_COLUMNS.length) {
+        errors[`row_${rowNum}`] = { columns: `Expected ${BULK_COLUMNS.length} columns, got ${cells.length}` };
+        return;
+      }
+      const [name, cls, section, rollNumber, parentGuardian, contact, feeDues] = cells;
+
+      /* Required per row (only RollNumber may be blank) + format checks */
+      const rowErrors = {};
+      if (!name) rowErrors.Name = 'Required';
+      if (!cls) rowErrors.Class = 'Required';
+      else if (!/^\d{1,2}$/.test(cls)) rowErrors.Class = 'Must be a grade number (1–2 digits)';
+      if (!section) rowErrors.Section = 'Required';
+      else if (!/^[A-Z]$/.test(String(section).toUpperCase())) rowErrors.Section = 'Must be a single letter';
+      if (!parentGuardian) rowErrors.ParentGuardian = 'Required';
+      if (!contact) rowErrors.Contact = 'Required';
+      if (!feeDues) rowErrors.FeeDues = 'Required';
+      else if (Number.isNaN(Number(feeDues)) || Number(feeDues) < 0) rowErrors.FeeDues = 'Must be a non-negative number';
+      if (Object.keys(rowErrors).length > 0) {
+        errors[`row_${rowNum}`] = rowErrors;
+        return;
+      }
+
+      const parsed = studentSchema.safeParse({
+        name,
+        class: cls,
+        section: String(section).toUpperCase(),
+        rollNumber: rollNumber || undefined,
+        parentName: parentGuardian,
+        guardianContact: contact,
+        feeDues: Number(feeDues),
+      });
+      if (!parsed.success) errors[`row_${rowNum}`] = parsed.error.flatten().fieldErrors;
+      else entries.push(parsed.data);
+    });
+  } else if (Array.isArray(req.body?.students)) {
+    /* JSON fallback for programmatic use — identical validation rules */
+    if (req.body.students.length === 0) {
+      return sendError(res, 'Provide a non-empty "students" array', 400, 'BAD_REQUEST');
+    }
+    if (req.body.students.length > 200) {
+      return sendError(res, 'Bulk add is limited to 200 students per request', 400, 'BAD_REQUEST');
+    }
+    req.body.students.forEach((entry, i) => {
+      const parsed = studentSchema.safeParse(entry);
+      if (!parsed.success) errors[`row_${i + 1}`] = parsed.error.flatten().fieldErrors;
+      else entries.push(parsed.data);
+    });
+  } else {
+    return sendError(res, 'Attach a .csv or .xlsx file in the "file" field', 400, 'BAD_REQUEST');
+  }
+
+  /* ---------- 2. Atomic: reject the whole file if any row failed ---------- */
+  if (Object.keys(errors).length > 0) return sendValidationError(res, errors);
+
+  /* ---------- 3. Auto-generate blank roll numbers per class/section ---------- */
+  const groups = new Map();
+  const groupKey = (s) => `${String(s.class ?? '').trim()}-${String(s.section ?? '').trim().toUpperCase()}`;
+  MOCK_STUDENTS.forEach((s) => {
+    const k = groupKey(s);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(s);
+  });
+  entries.forEach((entry) => {
+    if (entry.rollNumber) return; // the row supplied one
+    const k = groupKey(entry);
+    const members = groups.get(k) || [];
+    const roll = nextRollNumber(members, latestRollYear(members));
+    entry.rollNumber = roll;
+    members.push({ rollNumber: roll }); // later blank rows in the same group must not collide
+  });
+
+  /* ---------- 4. Insert ---------- */
+  const created = entries.map((entry) => {
+    const s = { id: newId('stu'), userId: null, photo: null, ...entry };
+    MOCK_STUDENTS.push(s);
+    return s;
+  });
+  return sendSuccess(res, { created, count: created.length }, `${created.length} students added`, 201);
+});
 
 /** POST /api/v1/admin/students — create student */
 router.post('/students', (req, res) => {
