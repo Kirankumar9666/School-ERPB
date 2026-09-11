@@ -2,9 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
-const fs = require('fs');
-const http = require('http');
-const https = require('https');
 const config = require('./config/env');
 const { apiLimiter } = require('./middleware/rateLimiter.middleware');
 
@@ -71,23 +68,8 @@ app.use((err, req, res, next) => {
   sendError(res, 'Internal server error', 500, 'SERVER_ERROR');
 });
 
-// ─── Start Server ─────────────────────────────────────────────────────────
-// HTTPS is enabled automatically when TLS_KEY_PATH + TLS_CERT_PATH are set.
-// In production it is recommended to terminate TLS at a reverse proxy instead.
-const printBanner = (scheme) => {
-  console.log(`\n🏫 School ERP API running on ${scheme}://localhost:${config.port}`);
-  console.log(`   Environment : ${config.nodeEnv}`);
-  console.log(`   Health check: ${scheme}://localhost:${config.port}/health\n`);
-};
-
-if (config.tls.keyPath && config.tls.certPath) {
-  const credentials = {
-    key: fs.readFileSync(config.tls.keyPath),
-    cert: fs.readFileSync(config.tls.certPath),
-  };
-  https.createServer(credentials, app).listen(config.port, () => printBanner('https'));
-} else {
-  http.createServer(app).listen(config.port, () => printBanner('http'));
-}
+// ─── Server entry lives in src/server.js ──────────────────────────────────
+// app.js exports the configured app only, so tests can boot it on an
+// ephemeral port without binding the real listener.
 
 module.exports = app;

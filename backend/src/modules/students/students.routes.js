@@ -10,6 +10,7 @@ const {
   MOCK_ACHIEVEMENTS,
 } = require('../../mock/students');
 const { MOCK_TIMETABLE, MOCK_ANNOUNCEMENTS, MOCK_HOLIDAYS, MOCK_SYLLABUS } = require('../../mock/school');
+const { summarizeAttendance } = require('../../utils/attendance');
 
 const router = express.Router();
 
@@ -46,7 +47,7 @@ router.get('/:id/attendance', requireRole([ROLES.ADMIN, ROLES.STUDENT, ...EMPLOY
   }
 
   const records = MOCK_ATTENDANCE_STUDENT[id]?.[month] || {};
-  return sendSuccess(res, { studentId: id, month, records });
+  return sendSuccess(res, { studentId: id, month, records, summary: summarizeAttendance(records) });
 });
 
 /**

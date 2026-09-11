@@ -180,16 +180,18 @@
 
 ## Phase 11 — Testing
 
-- [ ] Unit tests: auth service (login, token, RBAC)
-- [ ] Unit tests: attendance calculation logic
-- [ ] Integration tests: student API endpoints
-- [ ] Integration tests: employee API endpoints
-- [ ] Integration tests: admin CRUD operations
-- [ ] E2E tests: login flow (all roles)
-- [ ] E2E tests: student views data correctly
-- [ ] E2E tests: employee leave apply + admin approve flow
-- [ ] Manual UI testing on Android
-- [ ] Manual UI testing on iOS
+- [x] Unit tests: auth service (login, token, RBAC) — `tests/auth.test.js` (14 tests: login success/failure, JWT payload, `/me`, refresh incl. inactive-account rejection, RBAC 403s, password-reset flow, 404 envelope)
+- [x] Unit tests: attendance calculation logic — `tests/attendance.test.js` (8 tests: student/employee month summaries incl. working hours, half-day weighting, holiday exclusion, empty/unknown-status safety)
+- [x] Integration tests: student API endpoints — `tests/students.api.test.js` (15 tests: ownership 403s, 404s, attendance with computed summary, marks, timetable, achievements, syllabus)
+- [x] Integration tests: employee API endpoints — `tests/employees.api.test.js` (15 tests: own/other profile access, attendance summary, leaves, payroll month filter, timetable by teacher, documents, apply-leave happy/validation/forbidden paths)
+- [x] Integration tests: admin CRUD operations — `tests/admin.api.test.js` (20 tests: students/employees CRUD, attendance marking + upsert verification, marks publish, announcements, holidays, leaves approve/reject, users, audit log, RBAC denials)
+- [x] E2E tests: login flow (all roles) — `tests/e2e.test.js` (admin/teacher/accountant/student login → role-correct data)
+- [x] E2E tests: student views data correctly — student journey: profile → attendance (summary) → marks → timetable → announcements
+- [x] E2E tests: employee leave apply + admin approve flow — apply → pending visible → admin approve → `approved`; reject path → `rejected`
+- [ ] Manual UI testing on Android — deferred (responsive CSS done; needs a real device/emulator)
+- [ ] Manual UI testing on iOS — deferred (needs a real device/simulator)
+
+**Result: 77 tests, 77 passing, 0 failures** — run with `npm test` (Node built-in test runner, zero extra dependencies). Testability refactor: `src/server.js` is now the entry point (`app.js` exports the app only) and attendance-summary logic was extracted to `src/utils/attendance.js` and wired into both attendance endpoints.
 
 ---
 
@@ -218,7 +220,7 @@
 | 8     | Done        | All employee screens             |
 | 9     | Done        | All admin screens incl. syllabus/achievements/documents/users |
 | 10    | Done        | Security hardening (RBAC audit, rate limits, audit log, HTTPS option, npm audit 0 vulns) |
-| 11    | Not Started | Testing (smoke test written & passing ad-hoc) |
+| 11    | Done        | 77 tests passing (`npm test`): unit + integration + E2E; device UI testing deferred |
 | 12    | Not Started | Deployment                       |
 
 ---

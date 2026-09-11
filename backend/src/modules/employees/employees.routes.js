@@ -12,6 +12,7 @@ const {
   MOCK_DOCUMENTS,
 } = require('../../mock/employees');
 const { MOCK_TIMETABLE } = require('../../mock/school');
+const { summarizeAttendance } = require('../../utils/attendance');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -46,7 +47,7 @@ router.get('/:id/attendance', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), (re
 
   const month = req.query.month || new Date().toISOString().slice(0, 7);
   const records = MOCK_ATTENDANCE_EMPLOYEE[id]?.[month] || {};
-  return sendSuccess(res, { employeeId: id, month, records });
+  return sendSuccess(res, { employeeId: id, month, records, summary: summarizeAttendance(records) });
 });
 
 /**
