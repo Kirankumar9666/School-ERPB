@@ -45,7 +45,7 @@ export default function EmployeeTimetable() {
                   <td>{p.timeStart} – {p.timeEnd}</td>
                   <td>{p.subject}</td>
                   <td>{p.classKey.replace('cls-', '').replace('A', ' A')}</td>
-                  <td><span className="badge" style={{ background: 'rgba(34,211,238,0.15)', color: 'var(--clr-accent)' }}>{p.subject.slice(0, 3).toUpperCase()}</span></td>
+                  <td><span className="badge" style={{ background: 'var(--tint-slate)', color: 'var(--clr-accent)' }}>{p.subject.slice(0, 3).toUpperCase()}</span></td>
                   <td>{p.room}</td>
                 </tr>
               ))}

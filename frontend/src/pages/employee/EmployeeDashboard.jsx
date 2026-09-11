@@ -52,7 +52,7 @@ export default function EmployeeDashboard() {
               className="badge"
               style={{
                 marginTop: 10,
-                background: profile.status === 'active' ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)',
+                background: profile.status === 'active' ? 'var(--tint-green)' : 'var(--tint-gold)',
                 color: profile.status === 'active' ? 'var(--clr-success)' : 'var(--clr-warning)',
               }}
             >
@@ -72,7 +72,7 @@ export default function EmployeeDashboard() {
       <div className="overview-grid">
         {SHORTCUTS.map((card) => (
           <Link key={card.to} to={card.to} className="overview-card card--glow">
-            <div className="overview-card-icon" style={{ background: 'rgba(99,102,241,0.12)', color: 'var(--clr-primary-h)' }}>
+            <div className="overview-card-icon" style={{ background: 'var(--tint-oxblood)', color: 'var(--clr-primary-h)' }}>
               {card.icon}
             </div>
             <div className="overview-card-title">{card.label}</div>

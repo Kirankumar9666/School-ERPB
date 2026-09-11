@@ -46,7 +46,7 @@ export default function EmployeeAnnouncements() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-md)' }}>
                   <div style={{
                     width: 40, height: 40, borderRadius: 'var(--r-md)', flexShrink: 0,
-                    background: 'rgba(99,102,241,0.15)', color: 'var(--clr-primary-h)',
+                    background: 'var(--tint-oxblood)', color: 'var(--clr-primary-h)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}>
                     <Megaphone size={20} />
@@ -57,7 +57,7 @@ export default function EmployeeAnnouncements() {
                       {a.category} · {new Date(a.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
                     </div>
                   </div>
-                  <span className="badge" style={{ background: 'rgba(245,158,11,0.15)', color: 'var(--clr-warning)' }}>
+                  <span className="badge" style={{ background: 'var(--tint-gold)', color: 'var(--clr-warning)' }}>
                     {isOpen ? 'Hide' : 'View'}
                   </span>
                 </div>

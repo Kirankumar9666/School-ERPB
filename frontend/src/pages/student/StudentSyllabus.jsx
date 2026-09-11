@@ -39,7 +39,7 @@ export default function StudentSyllabus() {
             <div key={sub.subject} className="card" style={{ marginBottom: 'var(--sp-lg)' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--sp-md)' }}>
                 <div style={{ fontSize: 16, fontWeight: 700 }}>{sub.subject}</div>
-                <span className="badge" style={{ background: 'rgba(34,211,238,0.15)', color: 'var(--clr-accent)' }}>
+                <span className="badge" style={{ background: 'var(--tint-slate)', color: 'var(--clr-accent)' }}>
                   {pct}% completed
                 </span>
               </div>
@@ -51,7 +51,7 @@ export default function StudentSyllabus() {
 
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--sp-sm)' }}>
                 {sub.topics.map((t) => (
-                  <span key={t} className="badge" style={{ background: 'rgba(16,185,129,0.12)', color: 'var(--clr-success)' }}>
+                  <span key={t} className="badge" style={{ background: 'var(--tint-green)', color: 'var(--clr-success)' }}>
                     <Check size={11} style={{ marginRight: 4 }} />{t}
                   </span>
                 ))}

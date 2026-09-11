@@ -72,7 +72,7 @@ export default function AdminDashboard() {
           { to: '/admin/leaves',        icon: <Umbrella size={22} />,      label: 'Leave Approval',sub: `Approve (${summary?.pendingLeaves ?? 0} pending)` },
         ].map((c) => (
           <Link key={c.to} to={c.to} className="overview-card card--glow">
-            <div className="overview-card-icon" style={{ background: 'rgba(99,102,241,0.12)', color: 'var(--clr-primary-h)' }}>
+            <div className="overview-card-icon" style={{ background: 'var(--tint-oxblood)', color: 'var(--clr-primary-h)' }}>
               {c.icon}
             </div>
             <div className="overview-card-title">{c.label}</div>

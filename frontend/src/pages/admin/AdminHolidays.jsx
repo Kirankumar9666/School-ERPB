@@ -88,7 +88,7 @@ export default function AdminHolidays() {
             {sorted.map((h) => (
               <div key={h.id} className="doc-item">
                 <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-md)' }}>
-                  <div className="doc-icon" style={{ background: 'rgba(16,185,129,0.15)', color: 'var(--clr-success)' }}>
+                  <div className="doc-icon" style={{ background: 'var(--tint-green)', color: 'var(--clr-success)' }}>
                     <PartyPopper size={20} />
                   </div>
                   <div>

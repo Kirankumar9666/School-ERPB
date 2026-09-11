@@ -45,7 +45,7 @@ export default function AdminLeaves() {
           {leaves.map((l) => (
             <div key={l.id} className="doc-item">
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-md)', flex: 1 }}>
-                <div className="doc-icon" style={{ background: 'rgba(245,158,11,0.15)', color: 'var(--clr-warning)' }}>
+                <div className="doc-icon" style={{ background: 'var(--tint-gold)', color: 'var(--clr-warning)' }}>
                   <Umbrella size={20} />
                 </div>
                 <div style={{ flex: 1 }}>

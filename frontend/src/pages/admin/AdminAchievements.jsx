@@ -130,7 +130,7 @@ export default function AdminAchievements() {
             {achievements.map((a) => (
               <div key={a.id} className="doc-item">
                 <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-md)' }}>
-                  <div className="doc-icon" style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b' }}>
+                  <div className="doc-icon" style={{ background: 'var(--tint-gold)', color: 'var(--clr-warning)' }}>
                     <Trophy size={20} />
                   </div>
                   <div>

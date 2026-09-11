@@ -12,12 +12,12 @@ const getGreeting = () => {
 };
 
 const OVERVIEW_CARDS = [
-  { to: '/student/attendance',   icon: <CalendarDays size={22} />, label: 'Attendance',   sub: 'Monthly overview',    color: 'var(--clr-present)', bg: 'rgba(59,130,246,0.12)' },
-  { to: '/student/syllabus',     icon: <BookOpen size={22} />,     label: 'Syllabus',     sub: 'Class progress',      color: 'var(--clr-accent)',   bg: 'rgba(34,211,238,0.12)' },
-  { to: '/student/marks',        icon: <ClipboardList size={22} />,label: 'Marks',        sub: 'Progress card',       color: 'var(--clr-success)',  bg: 'rgba(16,185,129,0.12)' },
-  { to: '/student/timetable',    icon: <Clock size={22} />,        label: 'Time Table',   sub: 'Daily schedule',      color: 'var(--clr-warning)',  bg: 'rgba(245,158,11,0.12)' },
-  { to: '/student/circulars',    icon: <Bell size={22} />,          label: 'Circulars',    sub: 'Announcements',       color: 'var(--clr-primary-h)',bg: 'rgba(99,102,241,0.12)' },
-  { to: '/student/achievements', icon: <Trophy size={22} />,        label: 'Achievements', sub: 'Awards & certs',      color: 'var(--clr-warning)',  bg: 'rgba(245,158,11,0.12)' },
+  { to: '/student/attendance',   icon: <CalendarDays size={22} />, label: 'Attendance',   sub: 'Monthly overview',    color: 'var(--clr-present)', bg: 'var(--tint-slate)' },
+  { to: '/student/syllabus',     icon: <BookOpen size={22} />,     label: 'Syllabus',     sub: 'Class progress',      color: 'var(--clr-accent)',   bg: 'var(--tint-slate)' },
+  { to: '/student/marks',        icon: <ClipboardList size={22} />,label: 'Marks',        sub: 'Progress card',       color: 'var(--clr-success)',  bg: 'var(--tint-green)' },
+  { to: '/student/timetable',    icon: <Clock size={22} />,        label: 'Time Table',   sub: 'Daily schedule',      color: 'var(--clr-warning)',  bg: 'var(--tint-gold)' },
+  { to: '/student/circulars',    icon: <Bell size={22} />,          label: 'Circulars',    sub: 'Announcements',       color: 'var(--clr-primary-h)',bg: 'var(--tint-oxblood)' },
+  { to: '/student/achievements', icon: <Trophy size={22} />,        label: 'Achievements', sub: 'Awards & certs',      color: 'var(--clr-warning)',  bg: 'var(--tint-gold)' },
 ];
 
 export default function StudentHome() {

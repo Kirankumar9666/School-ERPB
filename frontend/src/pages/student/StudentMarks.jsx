@@ -73,7 +73,7 @@ export default function StudentMarks() {
                       {totalObtained}/{totalMax}
                     </div>
                     <div className="text-sm text-muted">Total Marks</div>
-                    <div className="badge" style={{ background: 'rgba(99,102,241,0.15)', color: 'var(--clr-primary-h)' }}>
+                    <div className="badge" style={{ background: 'var(--tint-oxblood)', color: 'var(--clr-primary-h)' }}>
                       Grade {grade}
                     </div>
                   </div>

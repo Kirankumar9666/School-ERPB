@@ -81,7 +81,7 @@ export default function StudentProfile() {
           {/* Read-only note */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 'var(--sp-sm)',
-            background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)',
+            background: 'var(--tint-oxblood)', border: '1px solid var(--tint-oxblood)',
             borderRadius: 'var(--r-sm)', padding: '10px var(--sp-md)',
             fontSize: 13, color: 'var(--clr-text-muted)'
           }}>

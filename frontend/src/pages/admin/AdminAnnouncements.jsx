@@ -103,7 +103,7 @@ export default function AdminAnnouncements() {
                     type="button"
                     style={{
                       cursor: 'pointer', border: '1px solid var(--clr-border)',
-                      background: form.targetRoles.includes(r) ? 'rgba(99,102,241,0.15)' : 'transparent',
+                      background: form.targetRoles.includes(r) ? 'var(--tint-oxblood)' : 'transparent',
                       color: form.targetRoles.includes(r) ? 'var(--clr-primary-h)' : 'var(--clr-text-dim)',
                     }}
                     className="badge"

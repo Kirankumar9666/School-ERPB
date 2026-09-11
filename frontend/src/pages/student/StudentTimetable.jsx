@@ -39,7 +39,7 @@ export default function StudentTimetable() {
         <>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--sp-sm)', marginBottom: 'var(--sp-lg)' }}>
             {timetable.periods.map((p) => (
-              <span key={`${p.period}`} className="badge" style={{ background: 'rgba(245,158,11,0.15)', color: 'var(--clr-warning)' }}>
+              <span key={`${p.period}`} className="badge" style={{ background: 'var(--tint-gold)', color: 'var(--clr-warning)' }}>
                 Period {p.period}
               </span>
             ))}
@@ -59,7 +59,7 @@ export default function StudentTimetable() {
                     <td>{p.timeStart} – {p.timeEnd}</td>
                     <td>{p.subject}</td>
                     <td>{p.teacher}</td>
-                    <td><span className="badge" style={{ background: 'rgba(34,211,238,0.15)', color: 'var(--clr-accent)' }}>{p.room}</span></td>
+                    <td><span className="badge" style={{ background: 'var(--tint-slate)', color: 'var(--clr-accent)' }}>{p.room}</span></td>
                   </tr>
                 ))}
               </tbody>

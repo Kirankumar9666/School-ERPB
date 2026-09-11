@@ -54,7 +54,7 @@ export default function StudentAchievements() {
                     {new Date(`${a.date}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
                   </div>
                 </div>
-                <span className="badge" style={{ background: 'rgba(99,102,241,0.15)', color: 'var(--clr-primary-h)', textTransform: 'capitalize' }}>
+                <span className="badge" style={{ background: 'var(--tint-oxblood)', color: 'var(--clr-primary-h)', textTransform: 'capitalize' }}>
                   {a.type}
                 </span>
               </div>

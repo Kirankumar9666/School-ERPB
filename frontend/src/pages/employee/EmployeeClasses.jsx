@@ -41,7 +41,7 @@ export default function EmployeeClasses() {
                   Class {c.class}-{c.section}
                 </div>
                 {c.isClassTeacher && (
-                  <span className="badge" style={{ background: 'rgba(245,158,11,0.15)', color: 'var(--clr-warning)' }}>
+                  <span className="badge" style={{ background: 'var(--tint-gold)', color: 'var(--clr-warning)' }}>
                     <Star size={11} style={{ marginRight: 4 }} />Class Teacher
                   </span>
                 )}
@@ -50,10 +50,10 @@ export default function EmployeeClasses() {
                 Subject: <b>{c.subject}</b>
               </div>
               <div style={{ display: 'flex', gap: 'var(--sp-md)', marginTop: 'var(--sp-md)', alignItems: 'center' }}>
-                <span className="badge" style={{ background: 'rgba(59,130,246,0.15)', color: 'var(--clr-info)' }}>
+                <span className="badge" style={{ background: 'var(--tint-slate)', color: 'var(--clr-info)' }}>
                   <Users size={11} style={{ marginRight: 4 }} />{c.studentCount} students
                 </span>
-                <span className="badge" style={{ background: 'rgba(34,211,238,0.15)', color: 'var(--clr-accent)' }}>
+                <span className="badge" style={{ background: 'var(--tint-slate)', color: 'var(--clr-accent)' }}>
                   <DoorOpen size={11} style={{ marginRight: 4 }} />Room {c.room}
                 </span>
               </div>
