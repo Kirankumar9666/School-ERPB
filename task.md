@@ -1,0 +1,225 @@
+# 📋 School ERP Portal — Task List
+
+> **Project:** School-ERPB
+> **Started:** 2026-09-10
+> **Status:** Development — mock-data prototype (backend + web app)
+
+> **Stack note:** Frontend uses **React + Vite** (web), backend uses **Express + mock data**.
+> PostgreSQL/Prisma and TypeScript are planned but the active prototype runs on JS + in-memory mock stores (Supabase/Postgres swap-out points are documented in code).
+
+---
+
+## Phase 1 — Project Setup
+
+- [x] Initialize project repository (Git + `.gitignore`)
+- [x] Setup monorepo structure (frontend + backend folders)
+- [x] Configure `.env` files for backend + frontend (never committed to git)
+- [ ] Setup TypeScript for both frontend and backend *(JS used in the prototype)*
+- [x] Install and configure ESLint/linter (oxlint on frontend; backend deps tracked in package.json)
+- [ ] Setup PostgreSQL database — *replaced with mock in-memory stores*
+- [ ] Setup Prisma ORM and define base schema — *mock stores used instead*
+- [x] Configure JWT auth library (jsonwebtoken)
+- [x] Setup folder structure as defined in planning.md
+
+---
+
+## Phase 2 — Authentication Module
+
+- [x] Design `users` table (mock store: id, username, password_hash, role, status)
+- [x] Implement password hashing with bcrypt (10 rounds)
+- [x] Build Login API (`POST /api/v1/auth/login`)
+  - [x] Validate username + password
+  - [x] Return JWT access token + refresh token
+  - [x] Return role info (password_hash never returned)
+- [x] Build Refresh Token API (`POST /api/v1/auth/refresh`)
+- [x] Implement auth middleware (JWT on every protected route)
+- [x] Implement RBAC middleware (role check per route)
+- [x] Implement login rate limiting (max 5 failed attempts → 15 min lock)
+- [x] Admin-only password reset API (`POST /api/v1/auth/reset-password` + `PUT /api/v1/admin/users/:id/reset-password`)
+- [x] Build Login Screen (UI)
+  - [x] Username + Password fields
+  - [x] Password visibility toggle
+  - [x] Forgot password info message ("Contact admin")
+  - [x] Loading state + error display
+
+---
+
+## Phase 3 — Database Schema
+
+> **Status:** Mock stores in `backend/src/mock/*` model all the relationships below.
+> Real PostgreSQL + Prisma migration remains future work.
+
+- [ ] `schools` table (id, name, logo, address)
+- [ ] `classes` table (id, school_id, name, section)
+- [ ] `students` table — **mock equivalent exists** (`src/mock/students.js`)
+- [ ] `employees` table — **mock equivalent exists** (`src/mock/employees.js`)
+- [ ] `attendance_students` table — **mock equivalent exists**
+- [ ] `attendance_employees` table — **mock equivalent exists**
+- [ ] `marks` table — **mock equivalent exists**
+- [ ] `exams` table (id, class_id, name, date)
+- [ ] `subjects` table (id, class_id, name)
+- [ ] `timetable` table — **mock equivalent exists**
+- [ ] `leaves` table — **mock equivalent exists**
+- [ ] `payroll` table — **mock equivalent exists**
+- [ ] `announcements` table — **mock equivalent exists**
+- [ ] `holidays` table — **mock equivalent exists**
+- [ ] `achievements` table — **mock equivalent exists**
+- [ ] `documents` table — **mock equivalent exists**
+- [ ] `syllabus` table — **mock equivalent exists**
+- [ ] Run initial migrations — *N/A (mock)*
+
+---
+
+## Phase 4 — Student Module (Backend APIs)
+
+- [x] `GET /api/v1/students/:id/profile`
+- [x] `GET /api/v1/students/:id/attendance?month=&year=`
+- [x] `GET /api/v1/students/:id/marks?examId=`
+- [x] `GET /api/v1/students/:id/timetable`
+- [x] `GET /api/v1/students/:id/achievements`
+- [x] `GET /api/v1/school/announcements` *(path: `/school` instead of `/schools/:schoolId`)*
+- [x] `GET /api/v1/school/holidays?month=&year=`
+- [x] `GET /api/v1/students/:id/syllabus` *(path: `/students/:id` instead of `/classes/:classId`)*
+
+---
+
+## Phase 5 — Employee Module (Backend APIs)
+
+- [x] `GET /api/v1/employees/:id/profile`
+- [x] `GET /api/v1/employees/:id/attendance?month=&year=`
+- [x] `POST /api/v1/employees/:id/leaves/apply`
+- [x] `GET /api/v1/employees/:id/leaves`
+- [x] `GET /api/v1/employees/:id/payroll?month=&year=`
+- [~] `GET /api/v1/employees/:id/payroll/:month/slip` — *client-side text slip download (no PDF/cloud storage yet)*
+- [x] `GET /api/v1/employees/:id/timetable`
+- [x] `GET /api/v1/employees/:id/assigned-classes`
+- [x] `GET /api/v1/employees/:id/documents`
+- [~] `GET /api/v1/employees/:id/documents/:docId/download` — *client-side placeholder download (signed URLs are future work)*
+
+---
+
+## Phase 6 — Admin Module (Backend APIs)
+
+- [x] Student CRUD: `POST/PUT/DELETE /api/v1/admin/students`
+- [x] Employee CRUD: `POST/PUT/DELETE /api/v1/admin/employees`
+- [x] Attendance management: `POST /api/v1/admin/attendance`
+- [x] Marks upload: `POST /api/v1/admin/marks`
+- [x] Timetable management: `GET/POST/DELETE /api/v1/admin/timetable`
+- [x] Syllabus upload: `POST /api/v1/admin/syllabus`
+- [x] Announcements: `GET/POST/PUT/DELETE /api/v1/admin/announcements`
+- [x] Holidays: `GET/POST/DELETE /api/v1/admin/holidays`
+- [x] Achievements: `POST/DELETE /api/v1/admin/achievements`
+- [x] Document upload: `POST /api/v1/admin/employees/:id/documents`
+- [x] Leave approval: `PUT /api/v1/admin/leaves/:id/status`
+- [x] Password reset: `PUT /api/v1/admin/users/:id/reset-password`
+- [x] Reports: `GET /api/v1/admin/reports/summary`
+
+---
+
+## Phase 7 — Student Section (Frontend Screens)
+
+- [x] Student Home screen (greeting, date, cards grid)
+- [x] Student Profile screen (read-only)
+- [x] Attendance Overview screen (month calendar, color coding)
+- [x] Marks / Progress Card screen
+- [x] Timetable screen (tabular)
+- [x] Syllabus screen (subjects + progress)
+- [x] Holiday Calendar screen
+- [x] School Circulars screen (list + detail view)
+- [x] Achievements screen
+
+---
+
+## Phase 8 — Employee Section (Frontend Screens)
+
+- [x] Employee Dashboard screen (quick-access shortcuts)
+- [x] My Profile screen
+- [x] Attendance screen (calendar + summary stats)
+- [x] Leave Management screen (apply + history + balance)
+- [x] Payroll screen (salary details + slip download)
+- [x] Timetable screen
+- [x] Assigned Classes screen
+- [x] Announcements / Notices screen
+- [x] Documents screen (list + download)
+
+---
+
+## Phase 9 — Admin Section (Frontend Screens)
+
+- [x] Admin Dashboard (summary cards: students, employees, fee status)
+- [x] Student management (list, add, edit, delete)
+- [x] Employee management (list, add, edit, delete)
+- [x] Attendance marking screen (students + employees)
+- [x] Marks entry screen (per student/exam)
+- [x] Timetable editor
+- [x] Announcements editor
+- [x] Holiday management
+- [x] Leave approval screen
+- [~] Syllabus upload screen — *backend API ready, admin UI pending*
+- [~] Achievements management — *backend API ready, admin UI pending*
+- [~] Document upload screen — *backend API ready, admin UI pending*
+- [~] Password reset screen — *backend API ready, admin UI pending*
+
+---
+
+## Phase 10 — Security Hardening
+
+- [ ] Audit all routes for missing auth/RBAC middleware
+- [ ] Verify no secrets exist in codebase (`git grep` check)
+- [ ] Confirm `.env` is in `.gitignore`
+- [ ] Enable HTTPS (SSL certificate) on server
+- [ ] Add rate limiting middleware to all sensitive routes
+- [ ] Verify all file downloads use signed URLs (not public links)
+- [ ] Sanitize all user inputs (zod/joi validation on every endpoint)
+- [ ] Confirm passwords are never logged or returned in API responses
+- [ ] Setup audit log table for admin actions
+- [ ] Run `npm audit` — fix critical/high vulnerabilities
+
+---
+
+## Phase 11 — Testing
+
+- [ ] Unit tests: auth service (login, token, RBAC)
+- [ ] Unit tests: attendance calculation logic
+- [ ] Integration tests: student API endpoints
+- [ ] Integration tests: employee API endpoints
+- [ ] Integration tests: admin CRUD operations
+- [ ] E2E tests: login flow (all roles)
+- [ ] E2E tests: student views data correctly
+- [ ] E2E tests: employee leave apply + admin approve flow
+- [ ] Manual UI testing on Android
+- [ ] Manual UI testing on iOS
+
+---
+
+## Phase 12 — Deployment & Final Polish
+
+- [ ] Setup CI/CD pipeline
+- [ ] Deploy backend to staging environment
+- [ ] Run full test suite on staging
+- [ ] Configure production environment variables
+- [ ] Deploy to production
+- [ ] Monitor error logs post-launch
+
+---
+
+## Progress Tracker
+
+| Phase | Status      | Notes             |
+|-------|-------------|-------------------|
+| 1     | In Progress | Setup done; TS/Postgres/Prisma deferred (JS + mock stores) |
+| 2     | Done        | Auth, JWT, RBAC, rate limit, login UI       |
+| 3     | Mock        | Schema modeled in mock stores; DB migration pending |
+| 4     | Done        | All student APIs (mock)         |
+| 5     | Done        | All employee APIs (mock); slip/doc downloads are client-side |
+| 6     | Done        | Full admin API set added         |
+| 7     | Done        | All student screens              |
+| 8     | Done        | All employee screens             |
+| 9     | Mostly Done | Core admin screens; syllabus/achievements/documents/password-reset UIs pending |
+| 10    | Not Started | Security hardening               |
+| 11    | Not Started | Testing (smoke test written & passing ad-hoc) |
+| 12    | Not Started | Deployment                       |
+
+---
+
+*Last Updated: 2026-09-11 | Author: Agent*
