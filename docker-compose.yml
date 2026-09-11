@@ -1,0 +1,66 @@
+# School ERP portal — local/staging deployment stack.
+#
+# Usage:
+#   cp .env.docker.example .env.docker    # then fill in the real secrets
+#   docker compose --env-file .env.docker up --build
+#
+# The web app is served by nginx on FRONTEND_PORT (default 8080) and proxies
+# /api to the backend service — same origin, so no CORS is involved. The
+# Postgres service is provisioned now so the upcoming Prisma migration can
+# adopt it without changing the deployment shape.
+
+name: school-erp
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-schoolerp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.docker}
+      POSTGRES_DB: ${POSTGRES_DB:-schoolerp}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-schoolerp} -d ${POSTGRES_DB:-schoolerp}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Not published to the host — reach it via `docker compose exec postgres psql`.
+    # Uncomment to inspect from the host:
+    # ports:
+    #   - '5432:5432'
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      # Production fail-fast: the API refuses to start without real secrets
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env.docker}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?set JWT_REFRESH_SECRET in .env.docker}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080}
+      # Wired for the upcoming Prisma migration (postgres service above)
+      DATABASE_URL: postgres://${POSTGRES_USER:-schoolerp}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-schoolerp}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Not published to the host — nginx proxies /api. Uncomment to debug:
+    # ports:
+    #   - '5000:5000'
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Baked into the bundle at build time; nginx proxies /api → backend
+        VITE_API_BASE_URL: /api/v1
+    restart: unless-stopped
+    ports:
+      - '${FRONTEND_PORT:-8080}:80'
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
