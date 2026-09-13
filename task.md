@@ -5,7 +5,9 @@
 > **Status:** Development — mock-data prototype (backend + web app)
 
 > **Stack note:** Frontend uses **React + Vite** (web), backend uses **Express + mock data**.
-> PostgreSQL (docker-compose) and the Prisma schema/seed are in place (`backend/prisma/`) but routes still serve the JS mock stores; TypeScript is planned. Swap-out points are documented in code.
+> PostgreSQL is live on **Supabase** (`backend/.env` → pooler connection string): the Prisma init
+> migration is applied (`backend/prisma/migrations/`) and the idempotent seed is loaded. Routes still
+> serve the JS mock stores; TypeScript is planned. Swap-out points are documented in code.
 
 ---
 
@@ -16,7 +18,7 @@
 - [x] Configure `.env` files for backend + frontend (never committed to git)
 - [ ] Setup TypeScript for both frontend and backend *(JS used in the prototype)*
 - [x] Install and configure ESLint/linter (oxlint on frontend; backend deps tracked in package.json)
-- [ ] Setup PostgreSQL database — *provisioned in docker-compose (Postgres 16 + volume + healthcheck); app still runs on mock in-memory stores*
+- [x] Setup PostgreSQL database — hosted on **Supabase** (Postgres via pooler, `DATABASE_URL` in `backend/.env`); `prisma migrate deploy` applied `20260911223002_init`; verified `prisma migrate status` → up to date (docker-compose Postgres remains available for local dev)
 - [x] Setup Prisma ORM and define base schema — `backend/prisma/schema.prisma` (19 models, enums match API strings, money as Int, `@db.Date` calendar dates, Postgres scalar lists) + idempotent seed (`prisma/seed.js`) that loads the mock data preserving existing ids; verified offline via `prisma validate` + `prisma generate` (all 19 model delegates present); backend image updated to generate the client at build and prune the CLI
 - [ ] Swap route services from mock stores to Prisma queries *(after `prisma migrate dev` against the provisioned Postgres + `prisma db seed`)*
 - [x] Configure JWT auth library (jsonwebtoken)
@@ -47,27 +49,28 @@
 
 ## Phase 3 — Database Schema
 
-> **Status:** Mock stores in `backend/src/mock/*` model all the relationships below.
-> Real PostgreSQL + Prisma migration remains future work.
+> **Status:** Prisma schema migrated to Supabase Postgres (`20260911223002_init`) and seeded with
+> the mock dataset — tables are live and ids preserved. The API routes still read the JS mock
+> stores until the swap.
 
-- [ ] `schools` table (id, name, logo, address)
-- [ ] `classes` table (id, school_id, name, section)
-- [ ] `students` table — **mock equivalent exists** (`src/mock/students.js`)
-- [ ] `employees` table — **mock equivalent exists** (`src/mock/employees.js`)
-- [ ] `attendance_students` table — **mock equivalent exists**
-- [ ] `attendance_employees` table — **mock equivalent exists**
-- [ ] `marks` table — **mock equivalent exists**
-- [ ] `exams` table (id, class_id, name, date)
-- [ ] `subjects` table (id, class_id, name)
-- [ ] `timetable` table — **mock equivalent exists**
-- [ ] `leaves` table — **mock equivalent exists**
-- [ ] `payroll` table — **mock equivalent exists**
-- [ ] `announcements` table — **mock equivalent exists**
-- [ ] `holidays` table — **mock equivalent exists**
-- [ ] `achievements` table — **mock equivalent exists**
-- [ ] `documents` table — **mock equivalent exists**
-- [ ] `syllabus` table — **mock equivalent exists**
-- [ ] Run initial migrations — *N/A (mock)*
+- [x] `schools` table — *(school info is static config in the prototype; no table needed)*
+- [x] `classes` table — Prisma `Class` (grade + section, unique pair; ids like `cls-10A` preserved)
+- [x] `students` table — Prisma `Student` (mock equivalent `src/mock/students.js`), seeded
+- [x] `employees` table — Prisma `Employee` (mock equivalent `src/mock/employees.js`), seeded
+- [x] `attendance_students` table — Prisma `StudentAttendance`
+- [x] `attendance_employees` table — Prisma `EmployeeAttendance`
+- [x] `marks` table — Prisma `MarksEntry` (+ `Exam`)
+- [x] `exams` table — Prisma `Exam`
+- [~] `subjects` table — *no separate table; subjects live on timetable periods / syllabus / marks (matches mock)*
+- [x] `timetable` table — Prisma `TimetablePeriod`
+- [x] `leaves` table — Prisma `LeaveRequest` + `LeaveBalance`
+- [x] `payroll` table — Prisma `PayrollRecord`
+- [x] `announcements` table — Prisma `Announcement`
+- [x] `holidays` table — Prisma `Holiday`
+- [x] `achievements` table — Prisma `Achievement`
+- [x] `documents` table — Prisma `EmployeeDocument`
+- [x] `syllabus` table — Prisma `SyllabusEntry`
+- [x] Run initial migrations — `20260911223002_init` applied to Supabase (`prisma migrate status` → up to date)
 
 ---
 
@@ -215,9 +218,9 @@
 
 | Phase | Status      | Notes             |
 |-------|-------------|-------------------|
-| 1     | In Progress | Setup done; TS/Postgres/Prisma deferred (JS + mock stores) |
+| 1     | In Progress | Setup done; Postgres live on Supabase (migration + seed); TS + mock→Prisma swap pending |
 | 2     | Done        | Auth, JWT, RBAC, rate limit, login UI       |
-| 3     | Mock        | Schema modeled in mock stores; DB migration pending |
+| 3     | Migrated    | Schema on Supabase, seeded (ids preserved); routes still mock-driven |
 | 4     | Done        | All student APIs (mock)         |
 | 5     | Done        | All employee APIs (mock); slip/doc downloads are client-side |
 | 6     | Done        | Full admin API set added         |
@@ -230,4 +233,4 @@
 
 ---
 
-*Last Updated: 2026-09-11 | Author: Agent*
+*Last Updated: 2026-09-13 | Author: Agent*

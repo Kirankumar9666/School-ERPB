@@ -61,15 +61,18 @@ async function main() {
 
   /* ---- employees (+ teaching assignments, class-teacher links) ---- */
   for (const e of MOCK_EMPLOYEES) {
-    const { assignedClasses, ...rest } = e;
+    const { assignedClasses, userId, ...rest } = e;
     await prisma.employee.create({
       data: {
         ...rest,
+        /* checked input: scalar FKs can't be mixed with nested writes, so the
+           User link is expressed as a connect (users are seeded above) */
+        user: userId ? { connect: { id: userId } } : undefined,
         dob: rest.dob ? at(rest.dob) : null,
         dateOfJoining: rest.dateOfJoining ? at(rest.dateOfJoining) : null,
-        assignments: {
+        classesTaught: {
           create: (assignedClasses || []).map((a) => ({
-            classId: a.classId,
+            class: { connect: { id: a.classId } },
             subject: a.subject,
             room: a.room ?? null,
             isClassTeacher: Boolean(a.isClassTeacher),
