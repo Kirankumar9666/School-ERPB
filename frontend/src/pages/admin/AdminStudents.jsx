@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { GraduationCap, Plus, Pencil, Trash, ChevronDown, Search, Upload } from 'lucide-react';
+import { GraduationCap, Plus, Pencil, Trash, Search, Upload, Users } from 'lucide-react';
 import Modal from '../../components/Modal';
 import api from '../../services/api';
 import { loadOptions } from '../../services/options';
@@ -42,9 +42,9 @@ export default function AdminStudents() {
   const [options, setOptions] = useState({ enums: {}, classes: [] });
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState('');
-  const [open, setOpen] = useState(null); // class key currently expanded
-  const [modal, setModal] = useState(null); // { mode: 'create' | 'edit' | 'bulk' }
+  const [modal, setModal] = useState(null); // { mode: 'create' | 'edit' | 'bulk' | 'roster', ... }
   const [form, setForm] = useState({ ...EMPTY_FORM });
+  const [rowRefs] = useState(() => new Map()); // class key → row element, for focus return
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -54,9 +54,11 @@ export default function AdminStudents() {
       api.get('/admin/students'),
       loadOptions(), // classes are re-read because this page can create them
     ]).then(([c, s, o]) => {
-      setClasses(c.data.data);
+      const classRows = c.data.data;
+      setClasses(classRows);
       setStudents(s.data.data);
       setOptions(o);
+      return { classes: classRows }; // so callers can sync an open roster modal
     });
 
   useEffect(() => {
@@ -68,10 +70,17 @@ export default function AdminStudents() {
     return (c.studentIds || []).map((id) => byId.get(id)).filter(Boolean);
   };
 
-  const openCreate = () => {
+  const openRoster = (c) =>
+    setModal({ mode: 'roster', cls: c, returnRef: { current: rowRefs.get(c.key) || null } });
+
+  const openCreate = (preset = {}) => {
     // Default to a class that exists (first by grade), never a fixed grade/section
     const first = options.classes[0];
-    setForm({ ...EMPTY_FORM, class: first?.grade || '', section: first?.section || '' });
+    setForm({
+      ...EMPTY_FORM,
+      class: preset.class ?? first?.grade ?? '',
+      section: preset.section ?? first?.section ?? '',
+    });
     setError('');
     setModal({ mode: 'create' });
   };
@@ -97,7 +106,14 @@ export default function AdminStudents() {
     try {
       await api.delete(`/admin/students/${s.id}`);
       toast.success('Student deleted.');
-      await load();
+      const fresh = await load();
+      // Keep an open roster modal, but rebind it to the refreshed summary row
+      // (close it if the class no longer exists after the delete).
+      setModal((m) => {
+        if (m?.mode !== 'roster') return m;
+        const updated = fresh.classes.find((x) => x.key === m.cls.key);
+        return updated ? { ...m, cls: updated } : null;
+      });
     } catch (err) {
       toast.error(err.response?.data?.message || 'Delete failed.');
     }
@@ -205,18 +221,16 @@ export default function AdminStudents() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-md)' }}>
           {classes.map((c) => {
-            const isOpen = open === c.key;
-            const members = membersFor(c);
             return (
               <div key={c.key}>
                 <div
-                  className="doc-item"
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => setOpen(isOpen ? null : c.key)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(isOpen ? null : c.key); } }}
+                  className="doc-item doc-item--link"
+                  onClick={() => openRoster(c)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openRoster(c); } }}
                   role="button"
                   tabIndex={0}
-                  aria-expanded={isOpen}
+                  aria-haspopup="dialog"
+                  ref={(el) => { if (el) rowRefs.set(c.key, el); else rowRefs.delete(c.key); }}
                 >
                   <div className="doc-icon">
                     <GraduationCap size={20} />
@@ -231,60 +245,100 @@ export default function AdminStudents() {
                     <div className="text-sm">{c.avgMarks != null ? `Avg ${c.avgMarks}%` : 'No marks yet'}</div>
                     <div className="text-sm text-muted">{c.topScore != null ? `Top ${c.topScore}%` : '—'}</div>
                   </div>
-                  <ChevronDown
-                    size={18}
-                    style={{ transform: isOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}
-                  />
+                  <Users size={18} className="text-muted" aria-hidden="true" />
                 </div>
-                {isOpen && (members.length === 0 ? (
-                  <div className="empty-state" style={{ padding: 'var(--sp-lg)' }}>
-                    No students in this class yet.
-                  </div>
-                ) : (
-                  <div className="table-wrapper" style={{ marginTop: 'var(--sp-sm)' }}>
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Roll No</th><th>Name</th><th>Parent</th><th>Contact</th><th>Fee Dues</th><th>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {members.map((s) => (
-                          <tr key={s.id}>
-                            <td>{s.rollNumber || '—'}</td>
-                            <td><b>{s.name}</b></td>
-                            <td>{s.parentName || '—'}</td>
-                            <td>{s.guardianContact || '—'}</td>
-                            <td>{s.feeDues ? money(s.feeDues) : '—'}</td>
-                            <td>
-                              <div className="flex gap-sm" style={{ alignItems: 'center' }}>
-                                <button
-                                  className="btn btn-secondary btn-sm"
-                                  onClick={(e) => { e.stopPropagation(); openEdit(s); }}
-                                  aria-label={`Edit ${s.name}`}
-                                >
-                                  <Pencil size={14} />
-                                </button>
-                                <button
-                                  className="btn btn-danger btn-sm"
-                                  onClick={(e) => { e.stopPropagation(); handleDelete(s); }}
-                                  aria-label={`Delete ${s.name}`}
-                                >
-                                  <Trash size={14} />
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ))}
               </div>
             );
           })}
         </div>
       )}
+
+      {modal?.mode === 'roster' && (() => {
+        const c = modal.cls;
+        const members = membersFor(c);
+        const sep = c.key.indexOf('-');
+        const preset = sep === -1
+          ? { class: c.key, section: '' }
+          : { class: c.key.slice(0, sep), section: c.key.slice(sep + 1) };
+        return (
+          <Modal
+            wide
+            title={c.class}
+            returnFocusRef={modal.returnRef}
+            onClose={() => setModal(null)}
+            footer={(
+              <button
+                className="btn btn-primary"
+                onClick={() => openCreate(preset)}
+                disabled={saving}
+              >
+                <Plus size={16} /> Add Student to this Class
+              </button>
+            )}
+          >
+            <div className="modal-meta">
+              <div>
+                <div className="modal-meta-label">Students</div>
+                <div className="modal-meta-value">{c.totalStudents}</div>
+              </div>
+              <div>
+                <div className="modal-meta-label">Fee Dues</div>
+                <div className="modal-meta-value">{money(c.feeDues)}</div>
+              </div>
+              <div>
+                <div className="modal-meta-label">Avg Marks</div>
+                <div className="modal-meta-value">{c.avgMarks != null ? `${c.avgMarks}%` : '—'}</div>
+              </div>
+              <div>
+                <div className="modal-meta-label">Top Score</div>
+                <div className="modal-meta-value">{c.topScore != null ? `${c.topScore}%` : '—'}</div>
+              </div>
+            </div>
+            {members.length === 0 ? (
+              <div className="empty-state" style={{ padding: 'var(--sp-xl)' }}>
+                No students in this class yet.
+              </div>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Roll No</th><th>Name</th><th>Parent</th><th>Contact</th><th>Fee Dues</th><th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {members.map((s) => (
+                    <tr key={s.id}>
+                      <td>{s.rollNumber || '—'}</td>
+                      <td><b>{s.name}</b></td>
+                      <td>{s.parentName || '—'}</td>
+                      <td>{s.guardianContact || '—'}</td>
+                      <td>{s.feeDues ? money(s.feeDues) : '—'}</td>
+                      <td>
+                        <div className="flex gap-sm" style={{ alignItems: 'center' }}>
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => openEdit(s)}
+                            aria-label={`Edit ${s.name}`}
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            className="btn btn-danger btn-sm"
+                            onClick={() => handleDelete(s)}
+                            aria-label={`Delete ${s.name}`}
+                          >
+                            <Trash size={14} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Modal>
+        );
+      })()}
 
       {(modal?.mode === 'create' || modal?.mode === 'edit') && (
         <Modal

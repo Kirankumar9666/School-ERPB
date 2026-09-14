@@ -161,7 +161,7 @@
 ## Phase 9 — Admin Section (Frontend Screens)
 
 - [x] Admin Dashboard (summary cards: students, employees, fee status)
-- [x] Student management (list, add, edit, delete)
+- [x] Student management (list, add, edit, delete) — class rows open a **roster modal** (not inline expansion): dimmed backdrop, header stats + scrollable member table + "Add Student to this Class" footer, `Esc`/backdrop/✕ to close, focus trapped inside and returned to the triggering row; centered panel on desktop, full-height sheet on phones; shared `Modal` upgraded with focus trap, Esc handling and focus restore for every dialog in the app
 - [x] Employee management (list, add, edit, delete)
 - [x] Attendance marking screen (students + employees)
 - [x] Marks entry screen (per student/exam) — `AdminMarks.jsx`: named subject rows for one student **plus** CSV/XLSX bulk upload (template download, per-row/column rejection list); every stat card, saved-marks table and total on the page is recomputed from the rows actually stored, never hardcoded

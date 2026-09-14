@@ -442,6 +442,72 @@
   background: var(--paper-2);
   border-radius: 0 0 var(--r-md) var(--r-md);
 }
+/* Roster panels — wider than forms, scrollable body, footer stays visible */
+.modal--wide { max-width: 860px; }
+.modal--wide .modal-body {
+  padding: 0;
+  overflow-y: auto;
+  max-height: calc(100vh - 240px);
+}
+.modal--wide .modal-footer { border-radius: 0; }
+/* Roster table inside the wide modal — same ledger style as .table-wrapper */
+.modal--wide table { width: 100%; border-collapse: collapse; }
+.modal--wide th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 10px 16px;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  background: var(--paper-2);
+  border-bottom: 1px solid var(--line-2);
+  white-space: nowrap;
+}
+.modal--wide td {
+  padding: 11px 16px;
+  font-size: 13.5px;
+  color: var(--ink);
+  border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+.modal--wide tbody tr:last-child td { border-bottom: none; }
+.modal--wide tbody tr:hover td { background: #f6f2e8; }
+.modal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-md) var(--sp-xl);
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper-2);
+}
+.modal-meta > div { min-width: 96px; }
+.modal-meta-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+.modal-meta-value {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+/* Full-height sheet instead of centered box on phones */
+@media (max-width: 640px) {
+  .modal--wide {
+    max-width: none;
+    max-height: calc(100dvh - 32px);
+    align-self: flex-end;
+  }
+  .modal--wide .modal-body { max-height: none; }
+  .modal-overlay:has(.modal--wide) { padding: var(--sp-md); align-items: stretch; }
+}
 /* ═══════════════════════════════════════════════════ LOGIN */
 .login-page {
   display: flex;
@@ -637,6 +703,12 @@
   transition: border-color var(--transition), background var(--transition);
 }
 .doc-item:hover { border-color: var(--line-2); background: #fffdf6; }
+/* Interactive class row — opens the roster dialog; shows pointer + focus ring */
+.doc-item--link { cursor: pointer; }
+.doc-item--link:focus-visible {
+  outline: 2px solid var(--oxblood);
+  outline-offset: 2px;
+}
 .doc-icon {
   display: flex;
   align-items: center;
