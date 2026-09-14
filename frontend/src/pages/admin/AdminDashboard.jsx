@@ -81,9 +81,14 @@ export default function AdminDashboard() {
         ))}
       </div>
 
-      <Link to="/admin/students" className="btn btn-secondary" style={{ marginTop: 'var(--sp-xl)' }}>
-        Open student management <ArrowRight size={15} />
-      </Link>
+      <div style={{ marginTop: 'var(--sp-xl)', display: 'flex', gap: 'var(--sp-md)', flexWrap: 'wrap' }}>
+        <Link to="/admin/students" className="btn btn-secondary">
+          Open student management <ArrowRight size={15} />
+        </Link>
+        <Link to="/admin/employees" className="btn btn-secondary">
+          Open employees management <ArrowRight size={15} />
+        </Link>
+      </div>
     </div>
   );
 }

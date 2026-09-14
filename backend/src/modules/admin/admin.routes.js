@@ -61,6 +61,56 @@ const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD
 /** Convert an API 'YYYY-MM-DD' string to a UTC-midnight Date (or null) */
 const apiDate = (value) => (value ? new Date(`${value}T00:00:00.000Z`) : null);
 
+/* ---------- Bulk marks entry (CSV / XLSX) ---------- */
+
+/** Long/tidy format — one row per student per subject. Header row required, exact order. */
+const MARKS_BULK_COLUMNS = [
+  'RollNumber', 'StudentName', 'Class', 'Section', 'ExamName', 'ExamDate',
+  'Subject', 'MaxMarks', 'ObtainedMarks',
+];
+
+/** Maximum rows accepted per bulk-marks file */
+const MARKS_BULK_MAX_ROWS = 200;
+
+/** Multer keeps the upload in memory — no temp files to clean up. 5 MB cap. */
+const marksBulkUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+/** Example rows shipped in the downloadable template (clearly samples — replace before uploading) */
+const MARKS_BULK_EXAMPLES = [
+  ['STU-2026-901', 'Sample Student One', '10', 'A', 'Unit Test 2', '14-09-2026', 'Mathematics', 100, 88],
+  ['STU-2026-901', 'Sample Student One', '10', 'A', 'Unit Test 2', '14-09-2026', 'Science', 100, 91],
+  ['STU-2026-902', 'Sample Student Two', '10', 'A', 'Unit Test 2', '14-09-2026', 'Mathematics', 100, 79],
+];
+
+/** Build a UTC-midnight Date, rejecting impossible calendar dates (e.g. 31-02-2026) */
+const utcDate = (y, mo, d) => {
+  const date = new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d)));
+  const ok = date.getUTCFullYear() === Number(y)
+    && date.getUTCMonth() === Number(mo) - 1
+    && date.getUTCDate() === Number(d);
+  return ok ? date : null;
+};
+
+/**
+ * Parse an ExamDate cell into a UTC-midnight Date (null when invalid).
+ * Accepts real spreadsheet date cells (ExcelJS hands back Date instances) plus
+ * 'dd-mm-yyyy' (the template format), 'dd/mm/yyyy', 'dd.mm.yyyy' and 'yyyy-mm-dd'.
+ * Impossible calendar dates (e.g. 31-02-2026) parse to null so the row is rejected.
+ */
+const parseMarkDate = (value) => {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime())
+      ? null
+      : utcDate(value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate());
+  }
+  const text = String(value ?? '').trim();
+  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(text);
+  if (iso) return utcDate(iso[1], iso[2], iso[3]);
+  const dmy = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/.exec(text);
+  if (dmy) return utcDate(dmy[3], dmy[2], dmy[1]);
+  return null;
+};
+
 /** Shared student payload → Prisma data (resolves class/section to classId) */
 const studentDataFrom = async (data) => ({
   name: data.name,
@@ -841,6 +891,318 @@ router.get('/marks', async (req, res) => {
   const out = {};
   byStudent.forEach((rows, sid) => { out[sid] = groupMarksByExam(rows); });
   return sendSuccess(res, out);
+});
+
+/* ---------- Marks bulk upload routes (CSV / XLSX, parsed server-side) ---------- */
+
+/**
+ * POST /api/v1/admin/marks/bulk — bulk marks entry from a CSV/XLSX file.
+ * Long/tidy format, one row per student per subject; header row required in
+ * this exact order:
+ *   RollNumber, StudentName, Class, Section, ExamName, ExamDate, Subject, MaxMarks, ObtainedMarks
+ * Rows are matched to students by RollNumber (never by name — names collide).
+ * StudentName/Class/Section are readability/cross-check columns; Class+Section
+ * are only used to disambiguate when one roll number exists in several classes.
+ * Subject is free text — subjects are admin-defined per exam, so there is no
+ * fixed subject list to validate against.
+ * Atomic: every row is validated before a single write happens, so an invalid
+ * row rejects the whole file and the response names the failing row(s)/column(s).
+ * Up to 200 rows per file.
+ */
+router.post('/marks/bulk', marksBulkUpload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return sendError(res, 'No file uploaded — attach a .csv or .xlsx file', 400, 'BAD_REQUEST');
+  }
+
+  const originalName = String(req.file.originalname || '').toLowerCase();
+  if (!originalName.endsWith('.csv') && !originalName.endsWith('.xlsx')) {
+    return sendError(res, 'Unsupported file type — upload a .csv or .xlsx file', 400, 'BAD_REQUEST');
+  }
+
+  /* ---------- 1. Parse the file server-side (no manual string splitting) ---------- */
+  let records;
+  try {
+    if (originalName.endsWith('.csv')) {
+      records = parseCsv(req.file.buffer, {
+        bom: true,
+        trim: true,
+        skip_empty_lines: true,
+        relax_column_count: true, // ragged rows come through so we can report them per-row
+      });
+    } else {
+      const book = new ExcelJS.Workbook();
+      await book.xlsx.load(req.file.buffer);
+      if (!book.worksheets.length) return sendError(res, 'The workbook has no sheets', 400, 'BAD_REQUEST');
+
+      // Template files carry an extra 'Instructions' sheet, so prefer the sheet
+      // whose first row matches the required header; fall back to the first one.
+      const hasMarksHeader = (ws) => {
+        const cells = [];
+        ws.getRow(1).eachCell({ includeEmpty: true }, (cell, col) => { cells[col - 1] = String(cell.text ?? '').trim(); });
+        return cells.length === MARKS_BULK_COLUMNS.length
+          && cells.every((c, i) => c.toLowerCase() === MARKS_BULK_COLUMNS[i].toLowerCase());
+      };
+      const sheet = book.worksheets.find(hasMarksHeader) || book.worksheets[0];
+
+      records = [];
+      sheet.eachRow((row) => {
+        const cells = [];
+        row.eachCell({ includeEmpty: true }, (cell, col) => {
+          // Keep real Date instances (date-formatted cells) so they parse correctly
+          const value = cell.value;
+          cells[col - 1] = value instanceof Date ? value : (cell.text ?? '');
+        });
+        records.push(cells);
+      });
+    }
+  } catch (err) {
+    return sendError(res, `Could not parse the file: ${err.message}`, 400, 'BAD_REQUEST');
+  }
+
+  /* ---------- 2. Header row: required, exact column order ---------- */
+  const header = (records[0] || []).map((h) => String(h ?? '').trim());
+  const headerOk = header.length === MARKS_BULK_COLUMNS.length
+    && header.every((h, i) => h.toLowerCase() === MARKS_BULK_COLUMNS[i].toLowerCase());
+  if (!headerOk) {
+    return sendValidationError(res, { file: `Header row must be exactly: ${MARKS_BULK_COLUMNS.join(', ')}` });
+  }
+
+  const dataRows = records.slice(1);
+  if (dataRows.length === 0) {
+    return sendValidationError(res, { file: 'The file has no data rows' });
+  }
+  if (dataRows.length > MARKS_BULK_MAX_ROWS) {
+    return sendValidationError(res, {
+      file: `Up to ${MARKS_BULK_MAX_ROWS} rows per file — this file has ${dataRows.length}`,
+    });
+  }
+
+  /* ---------- 3. Validate every row (nothing is written yet) ---------- */
+  const errors = {};
+  const entries = [];
+  const seen = new Set(); // duplicate student+exam+subject guard for this file
+
+  const students = await prisma.student.findMany({ include: { class: true } });
+
+  // Roll numbers are unique per class, so the same roll number can exist in
+  // more than one class — index by roll number and keep the whole bucket.
+  const byRoll = new Map();
+  students.forEach((s) => {
+    const key = String(s.rollNumber ?? '').trim().toLowerCase();
+    if (!key) return;
+    if (!byRoll.has(key)) byRoll.set(key, []);
+    byRoll.get(key).push(s);
+  });
+
+  dataRows.forEach((cells, i) => {
+    const rowNum = i + 2; // header is row 1
+    const rowErrors = {};
+
+    if (cells.length !== MARKS_BULK_COLUMNS.length) {
+      errors[`row_${rowNum}`] = { columns: `Expected ${MARKS_BULK_COLUMNS.length} columns, got ${cells.length}` };
+      return;
+    }
+
+    const raw = {};
+    MARKS_BULK_COLUMNS.forEach((column, idx) => { raw[column] = cells[idx]; });
+    const text = (column) => String(raw[column] ?? '').trim();
+    const dateCell = raw.ExamDate;
+
+    // Every field must be present in every row
+    MARKS_BULK_COLUMNS.forEach((column) => {
+      const value = raw[column];
+      if (value === undefined || value === null || text(column) === '') {
+        rowErrors[column] = 'Required';
+      }
+    });
+
+    // Marks numeric / whole / in range, and ObtainedMarks <= MaxMarks
+    const maxMarks = Number(text('MaxMarks'));
+    const obtained = Number(text('ObtainedMarks'));
+    if (!rowErrors.MaxMarks && (!Number.isInteger(maxMarks) || maxMarks < 1)) {
+      rowErrors.MaxMarks = 'Must be a whole number of at least 1';
+    }
+    if (!rowErrors.ObtainedMarks && (!Number.isInteger(obtained) || obtained < 0)) {
+      rowErrors.ObtainedMarks = 'Must be a whole number of 0 or more';
+    }
+    if (!rowErrors.MaxMarks && !rowErrors.ObtainedMarks && obtained > maxMarks) {
+      rowErrors.ObtainedMarks = `Cannot exceed MaxMarks (${maxMarks})`;
+    }
+
+    // ExamDate parses as a real calendar date
+    const examDate = parseMarkDate(dateCell);
+    if (!rowErrors.ExamDate && !examDate) {
+      rowErrors.ExamDate = 'Must be a valid date (dd-mm-yyyy)';
+    }
+
+    // Match the student by roll number
+    const candidates = byRoll.get(text('RollNumber').toLowerCase()) || [];
+    let student = null;
+    if (candidates.length === 0) {
+      rowErrors.RollNumber = 'No student with this roll number';
+    } else if (candidates.length === 1) {
+      student = candidates[0];
+    } else {
+      // Same roll number in several classes — Class/Section must pick one
+      const grade = text('Class');
+      const section = text('Section').toUpperCase();
+      const narrowed = candidates.filter((c) => String(c.class.grade) === grade && c.class.section.toUpperCase() === section);
+      if (narrowed.length === 1) student = narrowed[0];
+      else rowErrors.RollNumber = `Roll number exists in ${candidates.length} classes — Class and Section must identify one of them`;
+    }
+
+    // One row per student per exam per subject — duplicates are ambiguous
+    if (student) {
+      const key = `${student.id}::${text('ExamName').toLowerCase()}::${text('Subject').toLowerCase()}`;
+      if (seen.has(key)) {
+        rowErrors.Subject = 'Duplicate row — this student/exam/subject appears more than once';
+      } else {
+        seen.add(key);
+      }
+    }
+
+    if (Object.keys(rowErrors).length) {
+      errors[`row_${rowNum}`] = rowErrors;
+      return;
+    }
+
+    entries.push({
+      studentId: student.id,
+      classId: student.classId,
+      studentName: student.name,
+      rollNumber: student.rollNumber,
+      class: String(student.class.grade),
+      section: student.class.section,
+      examName: text('ExamName'),
+      examDate,
+      subject: text('Subject'),
+      maxMarks,
+      obtained,
+    });
+  });
+
+  if (Object.keys(errors).length) {
+    const failed = Object.keys(errors).length;
+    return sendValidationError(res, {
+      ...errors,
+      file: `Nothing was saved — ${failed} row${failed === 1 ? '' : 's'} failed validation`,
+    });
+  }
+
+  /* ---------- 4. Persist atomically (one transaction — all or nothing) ---------- */
+  // Exams are unique per (class, name), so rows are grouped: one exam per class.
+  const examGroups = new Map();
+  entries.forEach((e) => {
+    const key = `${e.classId}::${e.examName.toLowerCase()}`;
+    if (!examGroups.has(key)) examGroups.set(key, { classId: e.classId, name: e.examName, date: e.examDate });
+  });
+
+  // Interactive transaction (the array form ignores `timeout`, and a 200-row
+  // file means 200+ upserts over a remote database — the default 5s would abort).
+  // Any failure rolls the whole file back, so nothing is partially saved.
+  const stamp = Date.now();
+  await prisma.$transaction(async (tx) => {
+    const examIdOf = new Map();
+    let n = 0;
+    for (const [key, group] of examGroups) {
+      n += 1;
+      const exam = await tx.exam.upsert({
+        where: { classId_name: { classId: group.classId, name: group.name } },
+        update: { date: group.date },
+        create: { id: `exam-${stamp}-${n}`, classId: group.classId, name: group.name, date: group.date },
+      });
+      examIdOf.set(key, exam.id);
+    }
+    for (const e of entries) {
+      const examId = examIdOf.get(`${e.classId}::${e.examName.toLowerCase()}`);
+      await tx.marksEntry.upsert({
+        where: { studentId_examId_subject: { studentId: e.studentId, examId, subject: e.subject } },
+        update: { maxMarks: e.maxMarks, obtained: e.obtained },
+        create: { studentId: e.studentId, examId, subject: e.subject, maxMarks: e.maxMarks, obtained: e.obtained },
+      });
+    }
+  }, { timeout: 180000, maxWait: 20000 });
+
+  const saved = entries.length;
+  const studentsTouched = new Set(entries.map((e) => e.studentId)).size;
+  const examsTouched = examGroups.size;
+
+  return sendSuccess(res, {
+    saved,
+    students: studentsTouched,
+    exams: examsTouched,
+    rows: entries.map((e) => ({
+      studentId: e.studentId,
+      studentName: e.studentName,
+      rollNumber: e.rollNumber,
+      class: e.class,
+      section: e.section,
+      examName: e.examName,
+      examDate: toDateStr(e.examDate),
+      subject: e.subject,
+      maxMarks: e.maxMarks,
+      obtained: e.obtained,
+    })),
+  }, `${saved} mark row${saved === 1 ? '' : 's'} saved for ${studentsTouched} student${studentsTouched === 1 ? '' : 's'} in ${examsTouched} exam${examsTouched === 1 ? '' : 's'}`, 201);
+});
+
+/**
+ * GET /api/v1/admin/marks/bulk-template — download the bulk-marks .xlsx
+ * template (header + example rows + an Instructions sheet). Built with the
+ * same ExcelJS version that parses uploads, so the downloaded file always
+ * matches exactly what the importer accepts.
+ */
+router.get('/marks/bulk-template', async (req, res) => {
+  const book = new ExcelJS.Workbook();
+  book.creator = 'School ERP';
+
+  const sheet = book.addWorksheet('Marks');
+  sheet.addRow(MARKS_BULK_COLUMNS);
+  sheet.getRow(1).font = { bold: true };
+  sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFE7D6' } };
+  MARKS_BULK_EXAMPLES.forEach((values) => {
+    const row = sheet.addRow(values);
+    row.font = { italic: true, color: { argb: 'FF808080' } };
+  });
+  sheet.columns.forEach((c) => { c.width = 16; });
+
+  const notes = book.addWorksheet('Instructions');
+  notes.addRow(['How to use this template']);
+  notes.getRow(1).font = { bold: true, size: 13 };
+  [
+    '',
+    `1. Go to the 'Marks' tab. The ${MARKS_BULK_EXAMPLES.length} data rows already there are EXAMPLES — delete or overwrite them before uploading.`,
+    '2. Use ONE ROW PER STUDENT PER SUBJECT (long/tidy format) — not one row per student with a column per subject.',
+    '3. Students are matched by RollNumber, so it must match a student already in the system.',
+    '4. Subject is free text. Any subject name is accepted — subjects are defined by the admin, not a fixed list.',
+    '5. Save as .xlsx or .csv, then upload it with "Bulk Upload" on the Marks Entry page.',
+    '',
+    'Column reference',
+  ].forEach((line) => notes.addRow([line]));
+  [
+    ['RollNumber', 'Required. Used to match the student record.'],
+    ['StudentName', 'Required, for readability/cross-check only — the system matches on RollNumber.'],
+    ['Class', 'Required. Grade/standard, e.g. 9, 10.'],
+    ['Section', 'Required. Section letter, e.g. A, B.'],
+    ['ExamName', 'Required. e.g. Unit Test 2.'],
+    ['ExamDate', 'Required. Format dd-mm-yyyy (Excel date cells also work).'],
+    ['Subject', 'Required. Any subject name — not limited to a fixed list.'],
+    ['MaxMarks', 'Required. Whole number, must be at least 1.'],
+    ['ObtainedMarks', 'Required. Whole number, must be <= MaxMarks.'],
+  ].forEach(([column, description]) => notes.addRow([column, description]));
+  notes.addRow([]);
+  [
+    `- Up to ${MARKS_BULK_MAX_ROWS} rows per file.`,
+    '- Rows are validated together: if any row is invalid nothing is saved (atomic upload).',
+    '- A student with 5 subjects needs 5 rows, all sharing the same RollNumber, ExamName and ExamDate.',
+  ].forEach((line) => notes.addRow([line]));
+  notes.getColumn(1).width = 18;
+  notes.getColumn(2).width = 80;
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="marks_bulk_upload_template.xlsx"');
+  await book.xlsx.write(res);
+  return res.end();
 });
 
 /* ---------- Timetable ---------- */

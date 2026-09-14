@@ -50,6 +50,7 @@ export default function AdminTimetable() {
   };
 
   const handleDelete = async (ck, period) => {
+    if (!window.confirm(`Delete period ${period} of class ${ck}? This cannot be undone.`)) return;
     try {
       await api.delete(`/admin/timetable/${ck}/${period}`);
       toast.success('Period removed.');

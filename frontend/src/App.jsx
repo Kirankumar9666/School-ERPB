@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { Toaster } from 'react-hot-toast'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { ROLES, EMPLOYEE_ROLES } from './constants/roles'
 import ProtectedLayout from './components/ProtectedLayout'
@@ -123,6 +124,10 @@ export default function App() {
 
           <Route path="*" element={<RootRedirect />} />
         </Routes>
+        {/* Toasts are fired from many pages (upload success/failure, deletes,
+            form validation). Without this single mount react-hot-toast renders
+            nothing, so successful actions looked like the button did nothing. */}
+        <Toaster position="top-right" toastOptions={{ duration: 4000 }} />
       </BrowserRouter>
     </AuthProvider>
   )

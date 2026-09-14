@@ -48,6 +48,7 @@ export default function AdminDocuments() {
   };
 
   const handleDelete = async (doc) => {
+    if (!window.confirm(`Delete document record "${doc.fileName}"? This cannot be undone.`)) return;
     try {
       await api.delete(`/admin/documents/${doc.id}`);
       toast.success('Document record removed.');

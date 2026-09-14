@@ -40,6 +40,7 @@ export default function AdminHolidays() {
   };
 
   const handleDelete = async (h) => {
+    if (!window.confirm(`Delete holiday "${h.name}"? This cannot be undone.`)) return;
     try {
       await api.delete(`/admin/holidays/${h.id}`);
       toast.success('Holiday removed.');

@@ -52,6 +52,7 @@ export default function AdminAchievements() {
   };
 
   const handleDelete = async (ach) => {
+    if (!window.confirm(`Delete achievement "${ach.title}"? This cannot be undone.`)) return;
     try {
       await api.delete(`/admin/achievements/${ach.id}`);
       toast.success('Achievement deleted.');
