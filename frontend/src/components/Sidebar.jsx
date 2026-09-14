@@ -4,7 +4,7 @@ import { ROLES, EMPLOYEE_ROLES } from '../constants/roles';
 import {
   LayoutDashboard, User, CalendarDays, BookOpen, ClipboardList,
   Bell, Umbrella, DollarSign, Clock, Users, FileText,
-  LogOut, BookMarked, Trophy, PartyPopper, Upload, KeyRound, FolderUp
+  LogOut, BookMarked, Trophy, PartyPopper, Upload, KeyRound, FolderUp, X
 } from 'lucide-react';
 
 /** Navigation config per role */
@@ -102,7 +102,20 @@ NAV_CONFIG[ROLES.ADMIN] = {
   ],
 };
 
-export default function Sidebar() {
+/**
+ * Sidebar — the portal's navigation panel (same nav list for every role).
+ *
+ * It renders inside the collapsible container owned by ProtectedLayout: the
+ * layout decides whether the panel is pinned open (desktop), slid off-canvas, or
+ * open as an overlay drawer — this component only supplies the content plus the
+ * callbacks the drawer needs.
+ *
+ * @param {object} props
+ * @param {Function} [props.onNavigate] Fired when a nav item is chosen; the
+ *   layout uses it to dismiss the drawer on small screens.
+ * @param {Function} [props.onClose] Dismisses the drawer (mobile close button).
+ */
+export default function Sidebar({ onNavigate, onClose }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
@@ -119,7 +132,7 @@ export default function Sidebar() {
   };
 
   return (
-    <aside className="sidebar">
+    <aside id="app-sidebar" className="sidebar">
       {/* Logo */}
       <div className="sidebar-logo">
         <div className="sidebar-logo-icon">🏫</div>
@@ -127,6 +140,16 @@ export default function Sidebar() {
           <div className="sidebar-logo-text">School ERP</div>
           <div className="sidebar-logo-sub">{config.label}</div>
         </div>
+        {/* Drawer dismiss — visible on small screens only (CSS), where the open
+            panel sits over the hamburger. */}
+        <button
+          type="button"
+          className="sidebar-close"
+          onClick={onClose}
+          aria-label="Close navigation menu"
+        >
+          <X size={15} />
+        </button>
       </div>
 
       {/* User */}
@@ -149,6 +172,7 @@ export default function Sidebar() {
                 to={item.to}
                 end={item.to === '/student' || item.to === '/employee' || item.to === '/admin'}
                 className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+                onClick={onNavigate}
               >
                 {item.icon}
                 {item.label}

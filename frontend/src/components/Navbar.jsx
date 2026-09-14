@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Menu } from 'lucide-react';
 
 /** Format time as HH:MM AM/PM */
 const formatTime = (date) =>
@@ -7,7 +8,23 @@ const formatTime = (date) =>
 const formatDate = (date) =>
   date.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
-export default function Navbar({ title, subtitle }) {
+/**
+ * Top bar — the sidebar hamburger (☰) plus the portal title on the left, the
+ * live clock and date on the right.
+ *
+ * The toggle is a real button, so it is reachable by keyboard and announces the
+ * collapsed state: `aria-expanded` mirrors it and `aria-controls` points at the
+ * sidebar (`id="app-sidebar"`). The button never shrinks, so it can neither
+ * overlap nor displace the title or the date/time block.
+ *
+ * @param {object} props
+ * @param {string} [props.title] Portal heading, e.g. "Admin Panel".
+ * @param {string} [props.subtitle] Small meta line under the heading.
+ * @param {boolean} props.sidebarOpen Current sidebar state (drives aria-expanded).
+ * @param {Function} props.onToggleSidebar Toggle handler owned by ProtectedLayout.
+ * @param {object} [props.toggleRef] Ref to the button, used to restore focus.
+ */
+export default function Navbar({ title, subtitle, sidebarOpen, onToggleSidebar, toggleRef }) {
   const [time, setTime] = useState(formatTime(new Date()));
 
   useEffect(() => {
@@ -15,9 +32,23 @@ export default function Navbar({ title, subtitle }) {
     return () => clearInterval(interval);
   }, []);
 
+  const toggleLabel = sidebarOpen ? 'Hide navigation menu' : 'Show navigation menu';
+
   return (
     <header className="navbar">
       <div className="navbar-left">
+        <button
+          type="button"
+          ref={toggleRef}
+          className="navbar-toggle"
+          onClick={onToggleSidebar}
+          aria-expanded={sidebarOpen}
+          aria-controls="app-sidebar"
+          aria-label={toggleLabel}
+          title={toggleLabel}
+        >
+          <Menu size={18} />
+        </button>
         <div className="navbar-title">{title || 'School ERP Portal'}</div>
         {subtitle && <div className="navbar-subtitle">{subtitle}</div>}
       </div>

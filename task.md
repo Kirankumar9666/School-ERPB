@@ -173,6 +173,7 @@
 - [x] Achievements management — `GET/POST/DELETE /admin/achievements` + `AdminAchievements.jsx`
 - [x] Document upload screen — `GET/DELETE /admin/documents` + `AdminDocuments.jsx` (per-employee records)
 - [x] Password reset screen — `GET /admin/users` (sanitized) + `AdminUsers.jsx` (modal reset flow)
+- [x] Collapsible navigation (shared layout — student, employee and admin) — a hamburger (☰) in the top bar toggles the sidebar: **pinned open with the content pushed** on desktop (≥1024px) and an **off-canvas drawer over a dimmed backdrop** on smaller screens (tap outside / `Esc` / the in-panel ✕ dismiss it). The open/collapsed state persists in `localStorage` so it survives navigation, and only desktop toggles are remembered — a drawer left open on a phone never turns off the pinned default. The toggle is a real button with `aria-expanded` + `aria-controls`, the closed panel is `visibility: hidden` (so it cannot trap keyboard focus), and the nav list, profile block and Sign Out are untouched (layout/interaction only)
 
 ---
 
@@ -235,7 +236,7 @@
 | 6     | Done        | Full admin API set added         |
 | 7     | Done        | All student screens              |
 | 8     | Done        | All employee screens             |
-| 9     | Done        | All admin screens incl. syllabus/achievements/documents/users + bulk marks upload (CSV/XLSX + template); delete confirmations added; single `<Toaster/>` mount fixed so toasts actually render |
+| 9     | Done        | All admin screens incl. syllabus/achievements/documents/users + bulk marks upload (CSV/XLSX + template); delete confirmations added; single `<Toaster/>` mount fixed so toasts actually render; collapsible hamburger sidebar (shared layout, state persisted) |
 | 10    | Done        | Security hardening (RBAC audit, rate limits, audit log, HTTPS option, npm audit 0 vulns) |
 | 11    | Done        | 98 tests passing (`npm test`): unit + integration + E2E; device UI testing deferred |
 | 12    | In Progress | CI (GitHub Actions) + Docker/Compose incl. Postgres done; actual deploy pending |
