@@ -4,10 +4,11 @@
 > **Started:** 2026-09-10
 > **Status:** Development — mock-data prototype (backend + web app)
 
-> **Stack note:** Frontend uses **React + Vite** (web), backend uses **Express + mock data**.
-> PostgreSQL is live on **Supabase** (`backend/.env` → pooler connection string): the Prisma init
-> migration is applied (`backend/prisma/migrations/`) and the idempotent seed is loaded. Routes still
-> serve the JS mock stores; TypeScript is planned. Swap-out points are documented in code.
+> **Stack note:** Frontend uses **React + Vite** (web), backend uses **Express + Prisma**.
+> PostgreSQL is live on **Supabase** (`backend/.env` → session-pooler connection string): the Prisma
+> migrations are applied (`backend/prisma/migrations/`, incl. `20260914210000_rollnumber_per_class`)
+> and the idempotent seed is loaded. **All route modules now serve live Prisma data** — the JS mock
+> stores remain only as seed fixtures (and one unit-test fixture).
 
 ---
 
@@ -20,7 +21,13 @@
 - [x] Install and configure ESLint/linter (oxlint on frontend; backend deps tracked in package.json)
 - [x] Setup PostgreSQL database — hosted on **Supabase** (Postgres via pooler, `DATABASE_URL` in `backend/.env`); `prisma migrate deploy` applied `20260911223002_init`; verified `prisma migrate status` → up to date (docker-compose Postgres remains available for local dev)
 - [x] Setup Prisma ORM and define base schema — `backend/prisma/schema.prisma` (19 models, enums match API strings, money as Int, `@db.Date` calendar dates, Postgres scalar lists) + idempotent seed (`prisma/seed.js`) that loads the mock data preserving existing ids; verified offline via `prisma validate` + `prisma generate` (all 19 model delegates present); backend image updated to generate the client at build and prune the CLI
-- [ ] Swap route services from mock stores to Prisma queries *(after `prisma migrate dev` against the provisioned Postgres + `prisma db seed`)*
+- [x] Swap route services from mock stores to Prisma queries — all five route modules
+  (`admin`, `auth`, `employees`, `school`, `students`) now query via the shared
+  `src/services/prisma.js` client (singleton, with transparent retry for transient
+  Supabase pooler errors on reads) and map rows back to the exact mock API shapes via
+  `src/services/mappers.js`; verified by the full test suite (86/86 green).
+  Roll-number uniqueness was corrected to be per class (`@@unique([classId, rollNumber])`,
+  migration `20260914210000_rollnumber_per_class`) to match the class-scoped auto-generation.
 - [x] Configure JWT auth library (jsonwebtoken)
 - [x] Setup folder structure as defined in planning.md
 
@@ -49,9 +56,9 @@
 
 ## Phase 3 — Database Schema
 
-> **Status:** Prisma schema migrated to Supabase Postgres (`20260911223002_init`) and seeded with
-> the mock dataset — tables are live and ids preserved. The API routes still read the JS mock
-> stores until the swap.
+> **Status:** Prisma schema migrated to Supabase Postgres and seeded with
+> the mock dataset — tables are live and ids preserved. **All API routes now read/write
+> live Prisma data; the mock stores are no longer served.**
 
 - [x] `schools` table — *(school info is static config in the prototype; no table needed)*
 - [x] `classes` table — Prisma `Class` (grade + section, unique pair; ids like `cls-10A` preserved)
@@ -218,9 +225,9 @@
 
 | Phase | Status      | Notes             |
 |-------|-------------|-------------------|
-| 1     | In Progress | Setup done; Postgres live on Supabase (migration + seed); TS + mock→Prisma swap pending |
+| 1     | Done        | Setup done; Supabase live (migrations + seed); mock→Prisma swap complete, 86/86 tests green |
 | 2     | Done        | Auth, JWT, RBAC, rate limit, login UI       |
-| 3     | Migrated    | Schema on Supabase, seeded (ids preserved); routes still mock-driven |
+| 3     | Done        | Schema on Supabase + rollNumber per-class migration; routes fully Prisma-driven |
 | 4     | Done        | All student APIs (mock)         |
 | 5     | Done        | All employee APIs (mock); slip/doc downloads are client-side |
 | 6     | Done        | Full admin API set added         |
@@ -233,4 +240,4 @@
 
 ---
 
-*Last Updated: 2026-09-13 | Author: Agent*
+*Last Updated: 2026-09-14 | Author: Agent*

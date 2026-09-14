@@ -1,7 +1,12 @@
 /**
  * Shared test helpers for the Node built-in test runner.
  * Sets NODE_ENV=test (disables morgan) BEFORE the app/config modules load,
- * boots the Express app on an ephemeral port, and provides small fetch utils.
+ * re-seeds the database so every test file starts from the same state the
+ * in-memory mock stores used to provide, boots the Express app on an
+ * ephemeral port, and provides small fetch utils.
+ *
+ * NOTE: the per-file re-seed wipes all tables — only ever pointed at a dev
+ * database (DATABASE_URL in backend/.env), never production.
  */
 process.env.NODE_ENV = 'test';
 
@@ -9,6 +14,14 @@ const assert = require('node:assert/strict');
 
 /** Boot the API on a random port → { app, server, base } */
 async function startServer() {
+  // Fresh seeded state per test file (equivalent of fresh mock stores).
+  const { seed, prisma: seedPrisma } = require('../prisma/seed');
+  try {
+    await seed();
+  } finally {
+    await seedPrisma.$disconnect();
+  }
+
   const app = require('../src/app'); // lazy require: NODE_ENV must be set first
   const server = app.listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
@@ -16,11 +29,12 @@ async function startServer() {
   return { app, server, base };
 }
 
-/** Stop the server, dropping kept-alive sockets so the runner exits cleanly */
+/** Stop the server, close DB connections and drop kept-alive sockets */
 async function stopServer(server) {
   if (!server) return;
   if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
+  await require('../src/services/prisma').$disconnect();
 }
 
 /** POST /auth/login → resolves with the `data` payload (asserts success) */

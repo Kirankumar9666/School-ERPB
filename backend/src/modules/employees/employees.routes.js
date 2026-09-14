@@ -4,18 +4,25 @@ const authMiddleware = require('../../middleware/auth.middleware');
 const { requireRole } = require('../../middleware/role.middleware');
 const { ROLES, EMPLOYEE_ROLES } = require('../../constants/roles');
 const { sendSuccess, sendError, sendValidationError } = require('../../utils/response');
+const prisma = require('../../services/prisma');
 const {
-  MOCK_EMPLOYEES,
-  MOCK_ATTENDANCE_EMPLOYEE,
-  MOCK_LEAVES,
-  MOCK_PAYROLL,
-  MOCK_DOCUMENTS,
-} = require('../../mock/employees');
-const { MOCK_TIMETABLE } = require('../../mock/school');
+  mapEmployee,
+  mapLeave,
+  mapPayroll,
+  mapPeriod,
+  buildAttendanceRecords,
+  monthRange,
+  toIso,
+} = require('../../services/mappers');
 const { summarizeAttendance } = require('../../utils/attendance');
 
 const router = express.Router();
 router.use(authMiddleware);
+
+/* Shared include: employee + teaching assignments (with class + student counts) */
+const EMPLOYEE_INCLUDE = {
+  classesTaught: { include: { class: { include: { _count: { select: { students: true } } } } } },
+};
 
 /** Helper: verify employee access (employee sees own data, admin sees all) */
 const canAccessEmployee = (req, empId) => {
@@ -26,39 +33,55 @@ const canAccessEmployee = (req, empId) => {
 /**
  * GET /api/v1/employees/:id/profile
  */
-router.get('/:id/profile', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), (req, res) => {
+router.get('/:id/profile', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), async (req, res) => {
   const { id } = req.params;
   if (!canAccessEmployee(req, id)) return sendError(res, 'Access denied', 403, 'FORBIDDEN');
 
-  const employee = MOCK_EMPLOYEES.find((e) => e.id === id);
+  const employee = await prisma.employee.findUnique({ where: { id }, include: EMPLOYEE_INCLUDE });
   if (!employee) return sendError(res, 'Employee not found', 404, 'NOT_FOUND');
 
   // Never return passwordHash or sensitive auth fields
-  const { ...safeEmployee } = employee;
-  return sendSuccess(res, safeEmployee);
+  return sendSuccess(res, mapEmployee(employee));
 });
 
 /**
  * GET /api/v1/employees/:id/attendance?month=YYYY-MM
  */
-router.get('/:id/attendance', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), (req, res) => {
+router.get('/:id/attendance', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), async (req, res) => {
   const { id } = req.params;
   if (!canAccessEmployee(req, id)) return sendError(res, 'Access denied', 403, 'FORBIDDEN');
 
   const month = req.query.month || new Date().toISOString().slice(0, 7);
-  const records = MOCK_ATTENDANCE_EMPLOYEE[id]?.[month] || {};
+  const range = monthRange(month);
+  const rows = range
+    ? await prisma.employeeAttendance.findMany({
+      where: { employeeId: id, date: { gte: range.gte, lt: range.lt } },
+      orderBy: { date: 'asc' },
+    })
+    : [];
+  const records = buildAttendanceRecords(rows, true);
+
   return sendSuccess(res, { employeeId: id, month, records, summary: summarizeAttendance(records) });
 });
 
 /**
  * GET /api/v1/employees/:id/leaves
  */
-router.get('/:id/leaves', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), (req, res) => {
+router.get('/:id/leaves', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), async (req, res) => {
   const { id } = req.params;
   if (!canAccessEmployee(req, id)) return sendError(res, 'Access denied', 403, 'FORBIDDEN');
 
-  const leaves = MOCK_LEAVES[id] || { balance: {}, history: [] };
-  return sendSuccess(res, leaves);
+  const [balance, history] = await Promise.all([
+    prisma.leaveBalance.findUnique({ where: { employeeId: id } }),
+    prisma.leaveRequest.findMany({ where: { employeeId: id }, orderBy: { appliedAt: 'desc' } }),
+  ]);
+
+  return sendSuccess(res, {
+    balance: balance
+      ? { casual: balance.casual, sick: balance.sick, earned: balance.earned }
+      : {},
+    history: history.map(mapLeave),
+  });
 });
 
 /** Apply leave schema */
@@ -72,7 +95,7 @@ const applyLeaveSchema = z.object({
 /**
  * POST /api/v1/employees/:id/leaves/apply
  */
-router.post('/:id/leaves/apply', requireRole([...EMPLOYEE_ROLES]), (req, res) => {
+router.post('/:id/leaves/apply', requireRole([...EMPLOYEE_ROLES]), async (req, res) => {
   const { id } = req.params;
   if (!canAccessEmployee(req, id)) return sendError(res, 'Access denied', 403, 'FORBIDDEN');
 
@@ -80,77 +103,79 @@ router.post('/:id/leaves/apply', requireRole([...EMPLOYEE_ROLES]), (req, res) =>
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
   const { type, fromDate, toDate, reason } = parsed.data;
-  const newLeave = {
-    id: `lv-${Date.now()}`,
-    type,
-    fromDate,
-    toDate,
-    reason,
-    status: 'pending',
-    appliedAt: new Date().toISOString(),
-  };
+  const created = await prisma.leaveRequest.create({
+    data: {
+      employeeId: id,
+      type,
+      fromDate: new Date(`${fromDate}T00:00:00.000Z`),
+      toDate: new Date(`${toDate}T00:00:00.000Z`),
+      reason,
+    },
+  });
 
-  // In production: insert into Supabase
-  if (!MOCK_LEAVES[id]) MOCK_LEAVES[id] = { balance: {}, history: [] };
-  MOCK_LEAVES[id].history.unshift(newLeave);
-
-  return sendSuccess(res, newLeave, 'Leave application submitted', 201);
+  return sendSuccess(res, mapLeave(created), 'Leave application submitted', 201);
 });
 
 /**
  * GET /api/v1/employees/:id/payroll?month=YYYY-MM
  */
-router.get('/:id/payroll', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), (req, res) => {
+router.get('/:id/payroll', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), async (req, res) => {
   const { id } = req.params;
   if (!canAccessEmployee(req, id)) return sendError(res, 'Access denied', 403, 'FORBIDDEN');
 
   const { month } = req.query;
-  const records = MOCK_PAYROLL[id] || [];
-  const result = month ? records.filter((r) => r.month === month) : records;
-  return sendSuccess(res, result);
+  const records = await prisma.payrollRecord.findMany({
+    where: { employeeId: id, ...(month ? { month } : {}) },
+    orderBy: { month: 'asc' },
+  });
+  return sendSuccess(res, records.map(mapPayroll));
 });
 
 /**
  * GET /api/v1/employees/:id/timetable
+ * All timetable periods where this teacher's name matches.
  */
-router.get('/:id/timetable', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), (req, res) => {
+router.get('/:id/timetable', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), async (req, res) => {
   const { id } = req.params;
-  const employee = MOCK_EMPLOYEES.find((e) => e.id === id);
+  const employee = await prisma.employee.findUnique({ where: { id } });
   if (!employee) return sendError(res, 'Employee not found', 404, 'NOT_FOUND');
 
-  // Gather all timetable periods assigned to this teacher
-  const assignedPeriods = [];
-  Object.entries(MOCK_TIMETABLE).forEach(([classKey, periods]) => {
-    periods.forEach((period) => {
-      if (period.teacher === employee.name) {
-        assignedPeriods.push({ ...period, classKey });
-      }
-    });
+  const periods = await prisma.timetablePeriod.findMany({
+    where: { teacherName: employee.name },
+    orderBy: [{ classId: 'asc' }, { period: 'asc' }],
   });
 
-  return sendSuccess(res, assignedPeriods);
+  return sendSuccess(res, periods.map((p) => ({ ...mapPeriod(p), classKey: p.classId })));
 });
 
 /**
  * GET /api/v1/employees/:id/assigned-classes
  */
-router.get('/:id/assigned-classes', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), (req, res) => {
+router.get('/:id/assigned-classes', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), async (req, res) => {
   const { id } = req.params;
-  const employee = MOCK_EMPLOYEES.find((e) => e.id === id);
+  const employee = await prisma.employee.findUnique({ where: { id }, include: EMPLOYEE_INCLUDE });
   if (!employee) return sendError(res, 'Employee not found', 404, 'NOT_FOUND');
 
-  return sendSuccess(res, employee.assignedClasses || []);
+  return sendSuccess(res, mapEmployee(employee).assignedClasses);
 });
 
 /**
  * GET /api/v1/employees/:id/documents
  */
-router.get('/:id/documents', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), (req, res) => {
+router.get('/:id/documents', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), async (req, res) => {
   const { id } = req.params;
   if (!canAccessEmployee(req, id)) return sendError(res, 'Access denied', 403, 'FORBIDDEN');
 
-  const docs = MOCK_DOCUMENTS[id] || [];
-  return sendSuccess(res, docs);
+  const docs = await prisma.employeeDocument.findMany({
+    where: { employeeId: id },
+    orderBy: { uploadedAt: 'desc' },
+  });
+  return sendSuccess(res, docs.map((d) => ({
+    id: d.id,
+    type: d.type,
+    fileName: d.fileName,
+    uploadedAt: toIso(d.uploadedAt),
+  })));
 });
 
 module.exports = router;

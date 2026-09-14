@@ -3,8 +3,12 @@
  * currently serves, preserving the existing ids (usr-001, stu-001, cls-10A,
  * exam-001, ...) so API URLs stay stable after the mock -> Prisma swap.
  *
- * Run with:  npx prisma db seed      (requires DATABASE_URL + migrated db:
+ * Run as a CLI:  npx prisma db seed   (requires DATABASE_URL + migrated db:
  *                                     npx prisma migrate dev / deploy)
+ *
+ * Also importable:  const { seed } = require('../prisma/seed')  — the test
+ * helper calls this before each test file so every file starts from the same
+ * seeded state (the mock stores used to give each test process fresh data).
  *
  * Idempotent: wipes all tables in reverse-dependency order, then inserts.
  */
@@ -37,7 +41,33 @@ function collectClasses() {
   return byId;
 }
 
-async function main() {
+/**
+ * Retry wrapper — the remote Supabase pooler occasionally drops connections
+ * ("Can't reach database server" / "Server has closed the connection").
+ * Retries transient connectivity errors with backoff; real logic errors
+ * (validation, unique constraints) fail immediately.
+ */
+const TRANSIENT = ['P1001', 'P1002', 'P1017', "Can't reach database server", 'Server has closed the connection', 'Connection terminated', 'Timed out fetching'];
+const isTransient = (err) => TRANSIENT.some((t) => (err?.code && err.code === t) || String(err?.message || '').includes(t));
+
+async function withRetry(fn, attempts = 4, baseDelayMs = 1500) {
+  let lastErr;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isTransient(err) || i === attempts - 1) throw err;
+      const delay = baseDelayMs * 2 ** i;
+      console.warn(`[seed] transient DB error (${String(err.message).slice(0, 80)}) — retry ${i + 1}/${attempts - 1} in ${delay}ms`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
+async function seed() {
+  return withRetry(async () => {
   /* ---- wipe in reverse-dependency order (idempotent re-seed) ---- */
   for (const model of [
     'auditEntry', 'marksEntry', 'exam', 'studentAttendance', 'employeeAttendance',
@@ -235,8 +265,14 @@ async function main() {
     prisma.user.count(), prisma.class.count(), prisma.student.count(), prisma.employee.count(),
   ]);
   console.log(`Seed complete: ${users} users, ${classCount} classes, ${students} students, ${employees} employees.`);
+  });
 }
 
-main()
-  .catch((err) => { console.error(err); process.exit(1); })
-  .finally(() => prisma.$disconnect());
+module.exports = { seed, prisma };
+
+/* CLI entry (npx prisma db seed / node prisma/seed.js) */
+if (require.main === module) {
+  seed()
+    .catch((err) => { console.error(err); process.exit(1); })
+    .finally(() => prisma.$disconnect());
+}

@@ -3,7 +3,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { z } = require('zod');
 const config = require('../../config/env');
-const { MOCK_USERS } = require('../../mock/users');
+const prisma = require('../../services/prisma');
+const { mapUserPublic } = require('../../services/mappers');
 const { loginRateLimiter, refreshLimiter } = require('../../middleware/rateLimiter.middleware');
 const authMiddleware = require('../../middleware/auth.middleware');
 const { requireRole } = require('../../middleware/role.middleware');
@@ -30,9 +31,11 @@ router.post('/login', loginRateLimiter, async (req, res) => {
 
   const { username, password } = parsed.data;
 
-  // In production: query Supabase instead of MOCK_USERS
-  const user = MOCK_USERS.find((u) => u.username === username && u.status === 'active');
-  if (!user) {
+  const user = await prisma.user.findUnique({
+    where: { username },
+    include: { student: true, employee: true },
+  });
+  if (!user || user.status !== 'active') {
     return sendError(res, 'Invalid username or password', 401, 'INVALID_CREDENTIALS');
   }
 
@@ -41,7 +44,12 @@ router.post('/login', loginRateLimiter, async (req, res) => {
     return sendError(res, 'Invalid username or password', 401, 'INVALID_CREDENTIALS');
   }
 
-  const payload = { id: user.id, username: user.username, role: user.role, linkedEntityId: user.linkedEntityId };
+  const payload = {
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    linkedEntityId: user.student?.id || user.employee?.id || null,
+  };
 
   const accessToken = jwt.sign(payload, config.jwt.secret, { expiresIn: config.jwt.expiresIn });
   const refreshToken = jwt.sign({ id: user.id }, config.jwt.refreshSecret, { expiresIn: config.jwt.refreshExpiresIn });
@@ -49,14 +57,7 @@ router.post('/login', loginRateLimiter, async (req, res) => {
   return sendSuccess(res, {
     accessToken,
     refreshToken,
-    user: {
-      id: user.id,
-      name: user.name,
-      username: user.username,
-      role: user.role,
-      linkedEntityId: user.linkedEntityId || null,
-      profilePhoto: user.profilePhoto,
-    },
+    user: mapUserPublic(user),
   }, 'Login successful');
 });
 
@@ -69,7 +70,7 @@ const refreshSchema = z.object({
   refreshToken: z.string().min(10, 'Refresh token required'),
 });
 
-router.post('/refresh', refreshLimiter, (req, res) => {
+router.post('/refresh', refreshLimiter, async (req, res) => {
   const parsed = refreshSchema.safeParse(req.body);
   if (!parsed.success) {
     return sendValidationError(res, parsed.error.flatten().fieldErrors);
@@ -77,13 +78,21 @@ router.post('/refresh', refreshLimiter, (req, res) => {
 
   try {
     const decoded = jwt.verify(parsed.data.refreshToken, config.jwt.refreshSecret);
-    const user = MOCK_USERS.find((u) => u.id === decoded.id);
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.id },
+      include: { student: true, employee: true },
+    });
     if (!user) return sendError(res, 'User not found', 404, 'NOT_FOUND');
     if (user.status !== 'active') {
       return sendError(res, 'Account is no longer active', 403, 'ACCOUNT_INACTIVE');
     }
 
-    const payload = { id: user.id, username: user.username, role: user.role, linkedEntityId: user.linkedEntityId };
+    const payload = {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      linkedEntityId: user.student?.id || user.employee?.id || null,
+    };
     const newAccessToken = jwt.sign(payload, config.jwt.secret, { expiresIn: config.jwt.expiresIn });
 
     return sendSuccess(res, { accessToken: newAccessToken }, 'Token refreshed');
@@ -108,11 +117,13 @@ router.post('/reset-password', authMiddleware, requireRole([ROLES.ADMIN]), async
   }
 
   const { userId, newPassword } = parsed.data;
-  const user = MOCK_USERS.find((u) => u.id === userId);
+  const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) return sendError(res, 'User not found', 404, 'NOT_FOUND');
 
-  // In production: update the hash in Supabase
-  user.passwordHash = await bcrypt.hash(newPassword, 10);
+  await prisma.user.update({
+    where: { id: userId },
+    data: { passwordHash: await bcrypt.hash(newPassword, 10) },
+  });
 
   return sendSuccess(res, null, 'Password reset successfully');
 });
@@ -121,18 +132,14 @@ router.post('/reset-password', authMiddleware, requireRole([ROLES.ADMIN]), async
  * GET /api/v1/auth/me
  * Returns the currently authenticated user's info.
  */
-router.get('/me', authMiddleware, (req, res) => {
-  const user = MOCK_USERS.find((u) => u.id === req.user.id);
+router.get('/me', authMiddleware, async (req, res) => {
+  const user = await prisma.user.findUnique({
+    where: { id: req.user.id },
+    include: { student: true, employee: true },
+  });
   if (!user) return sendError(res, 'User not found', 404, 'NOT_FOUND');
 
-  return sendSuccess(res, {
-    id: user.id,
-    name: user.name,
-    username: user.username,
-    role: user.role,
-    linkedEntityId: user.linkedEntityId || null,
-    profilePhoto: user.profilePhoto,
-  });
+  return sendSuccess(res, mapUserPublic(user));
 });
 
 module.exports = router;

@@ -8,11 +8,20 @@ const authMiddleware = require('../../middleware/auth.middleware');
 const { requireRole } = require('../../middleware/role.middleware');
 const { ROLES, EMPLOYEE_ROLES } = require('../../constants/roles');
 const { sendSuccess, sendError, sendValidationError } = require('../../utils/response');
-const { MOCK_USERS } = require('../../mock/users');
-const { MOCK_STUDENTS, MOCK_MARKS, MOCK_ACHIEVEMENTS, MOCK_ATTENDANCE_STUDENT } = require('../../mock/students');
-const { MOCK_EMPLOYEES, MOCK_LEAVES, MOCK_DOCUMENTS, MOCK_ATTENDANCE_EMPLOYEE } = require('../../mock/employees');
-const { MOCK_ANNOUNCEMENTS, MOCK_HOLIDAYS, MOCK_TIMETABLE, MOCK_SYLLABUS } = require('../../mock/school');
-const { MOCK_AUDIT_LOG, recordAudit } = require('../../mock/audit');
+const prisma = require('../../services/prisma');
+const { isTransientDbError } = require('../../services/prisma');
+const {
+  mapStudent,
+  mapEmployee,
+  mapLeave,
+  mapUserPublic,
+  mapPeriod,
+  mapAchievement,
+  statusToDb,
+  classIdOf,
+  toDateStr,
+  toIso,
+} = require('../../services/mappers');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -21,18 +30,21 @@ router.use(requireRole([ROLES.ADMIN])); // All admin routes require ADMIN role
 /* ---------- Audit trail ---------- */
 /**
  * Every successful mutating request (POST/PUT/PATCH/DELETE) on any admin route
- * is recorded to the audit log. Bodies are never captured, so passwords can
- * never leak into the log. GET requests are not audited.
+ * is recorded to the audit_entries table. Bodies are never captured, so
+ * passwords can never leak into the log. GET requests are not audited.
  */
 router.use((req, res, next) => {
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
   res.on('finish', () => {
     if (res.statusCode < 400) {
-      recordAudit(req, {
-        entityType: 'admin-resource',
-        entityId: req.params.id || null,
-        message: `${req.method} ${req.originalUrl}`,
-      });
+      prisma.auditEntry.create({
+        data: {
+          actorUserId: req.user?.id || null,
+          entityType: 'admin-resource',
+          entityId: req.params.id || null,
+          message: `${req.method} ${req.originalUrl}`,
+        },
+      }).catch((err) => console.error('[audit] failed to record entry:', err.message));
     }
   });
   next();
@@ -40,11 +52,45 @@ router.use((req, res, next) => {
 
 /* ---------- helpers ---------- */
 
-/** Generate a unique mock id */
+/** Generate a unique id (same format the mock store used) */
 const newId = (prefix) => `${prefix}-${Date.now()}`;
 
 /** ISO date regex */
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD');
+
+/** Convert an API 'YYYY-MM-DD' string to a UTC-midnight Date (or null) */
+const apiDate = (value) => (value ? new Date(`${value}T00:00:00.000Z`) : null);
+
+/** Shared student payload → Prisma data (resolves class/section to classId) */
+const studentDataFrom = async (data) => ({
+  name: data.name,
+  classId: classIdOf(data.class, data.section),
+  rollNumber: data.rollNumber ?? null,
+  parentName: data.parentName ?? null,
+  guardianContact: data.guardianContact ?? null,
+  address: data.address ?? null,
+  admissionYear: data.admissionYear ?? null,
+  bloodGroup: data.bloodGroup ?? null,
+  dob: apiDate(data.dob),
+  feeTotal: data.feeTotal ?? null,
+  feeDues: data.feeDues ?? null,
+});
+
+/** Ensure the Class row for a grade/section pair exists (idempotent) */
+const ensureClass = (cls, section) => {
+  const id = classIdOf(cls, section);
+  return prisma.class.upsert({
+    where: { id },
+    update: {},
+    create: { id, grade: parseInt(cls, 10), section: String(section).toUpperCase() },
+  });
+};
+
+/** Friendly message for unique-constraint violations */
+const uniqueErrorMessage = (err, fallback) => {
+  const target = err?.meta?.target?.join(', ') || '';
+  return `Duplicate value for: ${target}`;
+};
 
 /* ---------- Students CRUD ---------- */
 
@@ -64,7 +110,10 @@ const studentSchema = z.object({
 });
 
 /** GET /api/v1/admin/students — list all students */
-router.get('/students', (req, res) => sendSuccess(res, MOCK_STUDENTS));
+router.get('/students', async (req, res) => {
+  const rows = await prisma.student.findMany({ include: { class: true }, orderBy: { id: 'asc' } });
+  return sendSuccess(res, rows.map(mapStudent));
+});
 
 /* ---------- Class summaries (derived aggregation over students + marks) ---------- */
 
@@ -82,18 +131,16 @@ const classKeyLabel = (student) => {
 };
 
 /**
- * Overall percent (0–100) for one student across all their exams,
+ * Overall percent (0–100) for one student across all their marks entries,
  * or null when the student has no marks yet (excluded from top/avg).
  */
-const studentOverallPercent = (marksMap, studentId) => {
-  const exams = marksMap?.[studentId] || [];
+const studentOverallPercent = (marksByStudent, studentId) => {
+  const rows = marksByStudent.get(studentId) || [];
   let obtained = 0;
   let max = 0;
-  exams.forEach((exam) => {
-    (exam.subjects || []).forEach((sub) => {
-      obtained += Number(sub.obtained) || 0;
-      max += Number(sub.maxMarks) || 0;
-    });
+  rows.forEach((row) => {
+    obtained += Number(row.obtained) || 0;
+    max += Number(row.maxMarks) || 0;
   });
   if (max <= 0) return null;
   return (obtained / max) * 100;
@@ -101,22 +148,44 @@ const studentOverallPercent = (marksMap, studentId) => {
 
 /**
  * GET /api/v1/admin/students/by-class — students grouped per class with aggregates.
- * Everything is derived live via groupBy + reduce from MOCK_STUDENTS (+ MOCK_MARKS),
- * so rows update automatically on any add/edit/delete. Query ?q= filters the
- * underlying students by name/roll/class before grouping.
+ * Derived live from the students + marks_entries tables, so rows update
+ * automatically on any add/edit/delete. Query ?q= filters the underlying
+ * students by name/roll/class/section before grouping.
  */
-router.get('/students/by-class', (req, res) => {
+router.get('/students/by-class', async (req, res) => {
   const q = String(req.query.q || '').trim().toLowerCase();
-  const pool = q
-    ? MOCK_STUDENTS.filter((s) =>
-      [s.name, s.rollNumber, s.class, s.section].some((v) =>
-        String(v ?? '').toLowerCase().includes(q)))
-    : MOCK_STUDENTS;
+
+  const [students, markRows] = await Promise.all([
+    prisma.student.findMany({ include: { class: true }, orderBy: { id: 'asc' } }),
+    prisma.marksEntry.findMany({ select: { studentId: true, obtained: true, maxMarks: true } }),
+  ]);
+
+  const marksByStudent = new Map();
+  markRows.forEach((m) => {
+    if (!marksByStudent.has(m.studentId)) marksByStudent.set(m.studentId, []);
+    marksByStudent.get(m.studentId).push(m);
+  });
+
+  // Same JS-side filter the mock version applied (small dataset, keeps ?q=
+  // semantics identical: name/roll/class/section substring match)
+  const matches = (s, mapped) => [mapped.name, mapped.rollNumber, mapped.class, mapped.section]
+    .some((v) => String(v ?? '').toLowerCase().includes(q));
+
+  const pool = q ? students.filter((s) => matches(s, mapStudent(s))) : students;
 
   const groups = new Map();
   pool.forEach((s) => {
-    const { key, label } = classKeyLabel(s);
-    if (!groups.has(key)) groups.set(key, { key, label, studentIds: [], members: [] });
+    const key = `${s.class.grade}-${s.class.section}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        label: `${s.class.grade} - Class ${s.class.section}`,
+        grade: s.class.grade,
+        section: s.class.section,
+        studentIds: [],
+        members: [],
+      });
+    }
     const g = groups.get(key);
     g.studentIds.push(s.id);
     g.members.push(s);
@@ -126,7 +195,7 @@ router.get('/students/by-class', (req, res) => {
     const totalStudents = g.members.length;
     const feeDues = g.members.reduce((sum, s) => sum + (Number(s.feeDues) || 0), 0);
     const percents = g.members
-      .map((m) => studentOverallPercent(MOCK_MARKS, m.id))
+      .map((m) => studentOverallPercent(marksByStudent, m.id))
       .filter((p) => p !== null);
     const topScore = percents.length ? Math.round(Math.max(...percents)) : null;
     const avgMarks = percents.length
@@ -306,10 +375,13 @@ router.post('/students/bulk', bulkUpload.single('file'), async (req, res) => {
   /* ---------- 3. Auto-generate blank roll numbers per class/section ---------- */
   const groups = new Map();
   const groupKey = (s) => `${String(s.class ?? '').trim()}-${String(s.section ?? '').trim().toUpperCase()}`;
-  MOCK_STUDENTS.forEach((s) => {
-    const k = groupKey(s);
+  const existing = await prisma.student.findMany({
+    select: { rollNumber: true, class: { select: { grade: true, section: true } } },
+  });
+  existing.forEach((s) => {
+    const k = groupKey({ class: s.class.grade, section: s.class.section });
     if (!groups.has(k)) groups.set(k, []);
-    groups.get(k).push(s);
+    groups.get(k).push({ rollNumber: s.rollNumber });
   });
   entries.forEach((entry) => {
     if (entry.rollNumber) return; // the row supplied one
@@ -320,52 +392,96 @@ router.post('/students/bulk', bulkUpload.single('file'), async (req, res) => {
     members.push({ rollNumber: roll }); // later blank rows in the same group must not collide
   });
 
-  /* ---------- 4. Insert ---------- */
-  const created = entries.map((entry) => {
-    const s = { id: newId('stu'), userId: null, photo: null, ...entry };
-    MOCK_STUDENTS.push(s);
-    return s;
-  });
+  /* ---------- 4. Insert (ensure Class rows, then create in row order) ---------- */
+  const stamp = Date.now();
+  const createdRows = [];
+  for (let i = 0; i < entries.length; i += 1) {
+    await ensureClass(entries[i].class, entries[i].section);
+    // Per-row recovery: a dropped pooler connection can lose the response
+    // AFTER the row committed, so a plain retry would trip the rollNumber
+    // unique constraint. On any failure, re-derive the next free roll number
+    // from fresh DB state and retry with a fresh unique id.
+    let row = null;
+    for (let attempt = 0; attempt < 3 && !row; attempt += 1) {
+      try {
+        // Sortable unique id ('stu-<ts>-<0001>') so a re-read preserves row order
+        row = await prisma.student.create({
+          data: {
+            id: `stu-${stamp}-${String(i + 1).padStart(4, '0')}${attempt ? `r${attempt}` : ''}`,
+            ...(await studentDataFrom(entries[i])),
+          },
+          include: { class: true },
+        });
+      } catch (err) {
+        const retriable = attempt < 2
+          && (String(err?.meta?.target || '').includes('rollNumber') || isTransientDbError(err));
+        if (!retriable) throw err;
+        const members = await prisma.student.findMany({
+          where: { classId: classIdOf(entries[i].class, entries[i].section) },
+          select: { rollNumber: true },
+        });
+        entries[i].rollNumber = nextRollNumber(members, latestRollYear(members));
+      }
+    }
+    createdRows.push(row);
+  }
+  const created = createdRows.map(mapStudent);
   return sendSuccess(res, { created, count: created.length }, `${created.length} students added`, 201);
 });
 
 /** POST /api/v1/admin/students — create student */
-router.post('/students', (req, res) => {
+router.post('/students', async (req, res) => {
   const parsed = studentSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
-  const newStudent = {
-    id: newId('stu'),
-    userId: null,
-    photo: null,
-    ...parsed.data,
-  };
-  MOCK_STUDENTS.push(newStudent);
-  return sendSuccess(res, newStudent, 'Student created', 201);
+  await ensureClass(parsed.data.class, parsed.data.section);
+  try {
+    const created = await prisma.student.create({
+      data: { id: newId('stu'), ...(await studentDataFrom(parsed.data)) },
+      include: { class: true },
+    });
+    return sendSuccess(res, mapStudent(created), 'Student created', 201);
+  } catch (err) {
+    if (err.code === 'P2002') return sendError(res, uniqueErrorMessage(err), 409, 'DUPLICATE');
+    throw err;
+  }
 });
 
 /** PUT /api/v1/admin/students/:id — update student */
-router.put('/students/:id', (req, res) => {
+router.put('/students/:id', async (req, res) => {
   const parsed = studentSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
-  const student = MOCK_STUDENTS.find((s) => s.id === req.params.id);
-  if (!student) return sendError(res, 'Student not found', 404, 'NOT_FOUND');
+  const existing = await prisma.student.findUnique({ where: { id: req.params.id } });
+  if (!existing) return sendError(res, 'Student not found', 404, 'NOT_FOUND');
 
-  Object.assign(student, parsed.data);
-  return sendSuccess(res, student, 'Student updated');
+  await ensureClass(parsed.data.class, parsed.data.section);
+  const updated = await prisma.student.update({
+    where: { id: req.params.id },
+    data: await studentDataFrom(parsed.data),
+    include: { class: true },
+  });
+  return sendSuccess(res, mapStudent(updated), 'Student updated');
 });
 
 /** DELETE /api/v1/admin/students/:id */
-router.delete('/students/:id', (req, res) => {
-  const idx = MOCK_STUDENTS.findIndex((s) => s.id === req.params.id);
-  if (idx === -1) return sendError(res, 'Student not found', 404, 'NOT_FOUND');
-
-  const [removed] = MOCK_STUDENTS.splice(idx, 1);
-  return sendSuccess(res, { id: removed.id }, 'Student deleted');
+router.delete('/students/:id', async (req, res) => {
+  try {
+    await prisma.student.delete({ where: { id: req.params.id } });
+    return sendSuccess(res, { id: req.params.id }, 'Student deleted');
+  } catch (err) {
+    if (err.code === 'P2025') return sendError(res, 'Student not found', 404, 'NOT_FOUND');
+    if (err.code === 'P2003') return sendError(res, 'Student has dependent records (attendance/marks/achievements)', 409, 'CONFLICT');
+    throw err;
+  }
 });
 
 /* ---------- Employees CRUD ---------- */
+
+/* Shared include: employee + teaching assignments (with class + student counts) */
+const EMPLOYEE_INCLUDE = {
+  classesTaught: { include: { class: { include: { _count: { select: { students: true } } } } } },
+};
 
 const employeeSchema = z.object({
   name: z.string().min(2).max(100),
@@ -388,60 +504,90 @@ const employeeSchema = z.object({
   status: z.enum(['active', 'inactive']).optional(),
 });
 
+/** Employee payload → Prisma data (dates as @db.Date, enums verbatim) */
+const employeeDataFrom = (d) => ({
+  name: d.name,
+  employeeId: d.employeeId ?? null,
+  gender: d.gender ?? null,
+  dob: apiDate(d.dob),
+  bloodGroup: d.bloodGroup ?? null,
+  mobile: d.mobile ?? null,
+  email: d.email ?? null,
+  address: d.address ?? null,
+  emergencyContact: d.emergencyContact ?? null,
+  department: d.department ?? null,
+  designation: d.designation ?? null,
+  role: d.role ?? null,
+  qualification: d.qualification ?? null,
+  dateOfJoining: apiDate(d.dateOfJoining),
+  experience: d.experience ?? null,
+  reportingPrincipal: d.reportingPrincipal ?? null,
+  employmentType: d.employmentType ?? null,
+  ...(d.status !== undefined ? { status: d.status } : {}),
+});
+
 /** GET /api/v1/admin/employees — list all employees */
-router.get('/employees', (req, res) => sendSuccess(res, MOCK_EMPLOYEES));
+router.get('/employees', async (req, res) => {
+  const rows = await prisma.employee.findMany({ include: EMPLOYEE_INCLUDE, orderBy: { id: 'asc' } });
+  return sendSuccess(res, rows.map(mapEmployee));
+});
 
 /** POST /api/v1/admin/employees — create employee */
-router.post('/employees', (req, res) => {
+router.post('/employees', async (req, res) => {
   const parsed = employeeSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
-  const newEmployee = {
-    id: newId('emp'),
-    userId: null,
-    photo: null,
-    assignedClasses: [],
-    ...parsed.data,
-  };
-  MOCK_EMPLOYEES.push(newEmployee);
-  return sendSuccess(res, newEmployee, 'Employee created', 201);
+  try {
+    const created = await prisma.employee.create({
+      data: { id: newId('emp'), ...employeeDataFrom(parsed.data) },
+    });
+    const full = await prisma.employee.findUnique({ where: { id: created.id }, include: EMPLOYEE_INCLUDE });
+    return sendSuccess(res, mapEmployee(full), 'Employee created', 201);
+  } catch (err) {
+    if (err.code === 'P2002') return sendError(res, uniqueErrorMessage(err), 409, 'DUPLICATE');
+    throw err;
+  }
 });
 
 /** PUT /api/v1/admin/employees/:id — update employee */
-router.put('/employees/:id', (req, res) => {
+router.put('/employees/:id', async (req, res) => {
   const parsed = employeeSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
-  const employee = MOCK_EMPLOYEES.find((e) => e.id === req.params.id);
-  if (!employee) return sendError(res, 'Employee not found', 404, 'NOT_FOUND');
+  const existing = await prisma.employee.findUnique({ where: { id: req.params.id } });
+  if (!existing) return sendError(res, 'Employee not found', 404, 'NOT_FOUND');
 
-  Object.assign(employee, parsed.data);
-  return sendSuccess(res, employee, 'Employee updated');
+  await prisma.employee.update({ where: { id: req.params.id }, data: employeeDataFrom(parsed.data) });
+  const updated = await prisma.employee.findUnique({ where: { id: req.params.id }, include: EMPLOYEE_INCLUDE });
+  return sendSuccess(res, mapEmployee(updated), 'Employee updated');
 });
 
 /** DELETE /api/v1/admin/employees/:id */
-router.delete('/employees/:id', (req, res) => {
-  const idx = MOCK_EMPLOYEES.findIndex((e) => e.id === req.params.id);
-  if (idx === -1) return sendError(res, 'Employee not found', 404, 'NOT_FOUND');
-
-  const [removed] = MOCK_EMPLOYEES.splice(idx, 1);
-  return sendSuccess(res, { id: removed.id }, 'Employee deleted');
+router.delete('/employees/:id', async (req, res) => {
+  try {
+    await prisma.employee.delete({ where: { id: req.params.id } });
+    return sendSuccess(res, { id: req.params.id }, 'Employee deleted');
+  } catch (err) {
+    if (err.code === 'P2025') return sendError(res, 'Employee not found', 404, 'NOT_FOUND');
+    if (err.code === 'P2003') return sendError(res, 'Employee has dependent records', 409, 'CONFLICT');
+    throw err;
+  }
 });
 
 /* ---------- Leaves ---------- */
 
 /** GET /api/v1/admin/leaves/pending — list all pending leave applications */
-router.get('/leaves/pending', (req, res) => {
-  const pending = [];
-  Object.entries(MOCK_LEAVES).forEach(([empId, data]) => {
-    const employee = MOCK_EMPLOYEES.find((e) => e.id === empId);
-    data.history
-      .filter((l) => l.status === 'pending')
-      .forEach((leave) => {
-        pending.push({ ...leave, employeeId: empId, employeeName: employee?.name });
-      });
+router.get('/leaves/pending', async (req, res) => {
+  const pending = await prisma.leaveRequest.findMany({
+    where: { status: 'pending' },
+    include: { employee: { select: { name: true } } },
+    orderBy: { appliedAt: 'desc' },
   });
-  return sendSuccess(res, pending);
+  return sendSuccess(res, pending.map((l) => ({
+    ...mapLeave(l),
+    employeeId: l.employeeId,
+    employeeName: l.employee?.name || null,
+  })));
 });
 
 /** PUT /api/v1/admin/leaves/:leaveId/status — approve or reject a leave */
@@ -449,71 +595,81 @@ const leaveStatusSchema = z.object({
   status: z.enum(['approved', 'rejected']),
 });
 
-router.put('/leaves/:leaveId/status', (req, res) => {
+router.put('/leaves/:leaveId/status', async (req, res) => {
   const parsed = leaveStatusSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
-  const { leaveId } = req.params;
-  const { status } = parsed.data;
-
-  let updated = false;
-  Object.values(MOCK_LEAVES).forEach((data) => {
-    const leave = data.history.find((l) => l.id === leaveId);
-    if (leave) {
-      leave.status = status;
-      updated = true;
-    }
-  });
-
-  if (!updated) return sendError(res, 'Leave record not found', 404, 'NOT_FOUND');
-  return sendSuccess(res, null, `Leave ${status} successfully`);
+  try {
+    await prisma.leaveRequest.update({
+      where: { id: req.params.leaveId },
+      data: { status: parsed.data.status, decidedAt: new Date() },
+    });
+    return sendSuccess(res, null, `Leave ${parsed.data.status} successfully`);
+  } catch (err) {
+    if (err.code === 'P2025') return sendError(res, 'Leave record not found', 404, 'NOT_FOUND');
+    throw err;
+  }
 });
 
 /* ---------- Announcements ---------- */
 
+/** DB row → mock API shape (createdAt as ISO string) */
+const mapAnnouncement = (a) => ({
+  id: a.id,
+  title: a.title,
+  body: a.body,
+  targetRoles: a.targetRoles,
+  category: a.category,
+  createdAt: toIso(a.createdAt),
+});
+
 const announcementSchema = z.object({
   title: z.string().min(3).max(200),
   body: z.string().min(10),
-  targetRoles: z.array(z.string()).min(1),
+  targetRoles: z.array(z.enum(Object.values(ROLES))).min(1),
   category: z.enum(['event', 'exam', 'holiday', 'meeting', 'general']),
 });
 
-/** GET /api/v1/admin/announcements — list all (admin sees everything) */
-router.get('/announcements', (req, res) => sendSuccess(res, MOCK_ANNOUNCEMENTS));
+/** GET /api/v1/admin/announcements — list all (admin sees everything), newest first */
+router.get('/announcements', async (req, res) => {
+  const rows = await prisma.announcement.findMany({ orderBy: { createdAt: 'desc' } });
+  return sendSuccess(res, rows.map(mapAnnouncement));
+});
 
 /** POST /api/v1/admin/announcements — create new announcement */
-router.post('/announcements', (req, res) => {
+router.post('/announcements', async (req, res) => {
   const parsed = announcementSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
-  const newAnnouncement = {
-    id: newId('ann'),
-    ...parsed.data,
-    createdAt: new Date().toISOString(),
-  };
-  MOCK_ANNOUNCEMENTS.unshift(newAnnouncement);
-  return sendSuccess(res, newAnnouncement, 'Announcement created', 201);
+  const created = await prisma.announcement.create({
+    data: { id: newId('ann'), ...parsed.data },
+  });
+  return sendSuccess(res, mapAnnouncement(created), 'Announcement created', 201);
 });
 
 /** PUT /api/v1/admin/announcements/:id — update announcement */
-router.put('/announcements/:id', (req, res) => {
+router.put('/announcements/:id', async (req, res) => {
   const parsed = announcementSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
-  const announcement = MOCK_ANNOUNCEMENTS.find((a) => a.id === req.params.id);
-  if (!announcement) return sendError(res, 'Announcement not found', 404, 'NOT_FOUND');
-
-  Object.assign(announcement, parsed.data);
-  return sendSuccess(res, announcement, 'Announcement updated');
+  try {
+    const updated = await prisma.announcement.update({ where: { id: req.params.id }, data: parsed.data });
+    return sendSuccess(res, mapAnnouncement(updated), 'Announcement updated');
+  } catch (err) {
+    if (err.code === 'P2025') return sendError(res, 'Announcement not found', 404, 'NOT_FOUND');
+    throw err;
+  }
 });
 
 /** DELETE /api/v1/admin/announcements/:id */
-router.delete('/announcements/:id', (req, res) => {
-  const idx = MOCK_ANNOUNCEMENTS.findIndex((a) => a.id === req.params.id);
-  if (idx === -1) return sendError(res, 'Announcement not found', 404, 'NOT_FOUND');
-
-  const [removed] = MOCK_ANNOUNCEMENTS.splice(idx, 1);
-  return sendSuccess(res, { id: removed.id }, 'Announcement deleted');
+router.delete('/announcements/:id', async (req, res) => {
+  try {
+    await prisma.announcement.delete({ where: { id: req.params.id } });
+    return sendSuccess(res, { id: req.params.id }, 'Announcement deleted');
+  } catch (err) {
+    if (err.code === 'P2025') return sendError(res, 'Announcement not found', 404, 'NOT_FOUND');
+    throw err;
+  }
 });
 
 /* ---------- Holidays ---------- */
@@ -523,26 +679,37 @@ const holidaySchema = z.object({
   name: z.string().min(2).max(100),
 });
 
-/** GET /api/v1/admin/holidays — list all */
-router.get('/holidays', (req, res) => sendSuccess(res, MOCK_HOLIDAYS));
+/** GET /api/v1/admin/holidays — list all (chronological) */
+router.get('/holidays', async (req, res) => {
+  const rows = await prisma.holiday.findMany({ orderBy: { date: 'asc' } });
+  return sendSuccess(res, rows.map((h) => ({ id: h.id, date: toDateStr(h.date), name: h.name })));
+});
 
 /** POST /api/v1/admin/holidays — add a holiday */
-router.post('/holidays', (req, res) => {
+router.post('/holidays', async (req, res) => {
   const parsed = holidaySchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
-  const newHoliday = { id: newId('hol'), ...parsed.data };
-  MOCK_HOLIDAYS.push(newHoliday);
-  return sendSuccess(res, newHoliday, 'Holiday added', 201);
+  try {
+    const created = await prisma.holiday.create({
+      data: { id: newId('hol'), date: apiDate(parsed.data.date), name: parsed.data.name },
+    });
+    return sendSuccess(res, { id: created.id, date: toDateStr(created.date), name: created.name }, 'Holiday added', 201);
+  } catch (err) {
+    if (err.code === 'P2002') return sendError(res, 'A holiday already exists on that date', 409, 'DUPLICATE');
+    throw err;
+  }
 });
 
 /** DELETE /api/v1/admin/holidays/:id */
-router.delete('/holidays/:id', (req, res) => {
-  const idx = MOCK_HOLIDAYS.findIndex((h) => h.id === req.params.id);
-  if (idx === -1) return sendError(res, 'Holiday not found', 404, 'NOT_FOUND');
-
-  const [removed] = MOCK_HOLIDAYS.splice(idx, 1);
-  return sendSuccess(res, { id: removed.id }, 'Holiday deleted');
+router.delete('/holidays/:id', async (req, res) => {
+  try {
+    await prisma.holiday.delete({ where: { id: req.params.id } });
+    return sendSuccess(res, { id: req.params.id }, 'Holiday deleted');
+  } catch (err) {
+    if (err.code === 'P2025') return sendError(res, 'Holiday not found', 404, 'NOT_FOUND');
+    throw err;
+  }
 });
 
 /* ---------- Attendance ---------- */
@@ -555,26 +722,34 @@ const attendanceSchema = z.object({
   workingHours: z.number().min(0).max(24).optional(),
 });
 
-/** POST /api/v1/admin/attendance — mark attendance for a student or employee */
-router.post('/attendance', (req, res) => {
+/** POST /api/v1/admin/attendance — mark attendance for a student or employee (upsert per day) */
+router.post('/attendance', async (req, res) => {
   const parsed = attendanceSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
   const { entityType, entityId, date, status, workingHours } = parsed.data;
-  const month = date.slice(0, 7);
+  const statusDb = statusToDb(status);
+  const day = apiDate(date);
+  const hours = workingHours ?? (status === 'present' ? 8 : 0);
 
   if (entityType === 'student') {
-    const student = MOCK_STUDENTS.find((s) => s.id === entityId);
+    const student = await prisma.student.findUnique({ where: { id: entityId } });
     if (!student) return sendError(res, 'Student not found', 404, 'NOT_FOUND');
-    if (!MOCK_ATTENDANCE_STUDENT[entityId]) MOCK_ATTENDANCE_STUDENT[entityId] = {};
-    if (!MOCK_ATTENDANCE_STUDENT[entityId][month]) MOCK_ATTENDANCE_STUDENT[entityId][month] = {};
-    MOCK_ATTENDANCE_STUDENT[entityId][month][date] = status;
+
+    await prisma.studentAttendance.upsert({
+      where: { studentId_date: { studentId: entityId, date: day } },
+      update: { status: statusDb },
+      create: { studentId: entityId, date: day, status: statusDb },
+    });
   } else {
-    const employee = MOCK_EMPLOYEES.find((e) => e.id === entityId);
+    const employee = await prisma.employee.findUnique({ where: { id: entityId } });
     if (!employee) return sendError(res, 'Employee not found', 404, 'NOT_FOUND');
-    if (!MOCK_ATTENDANCE_EMPLOYEE[entityId]) MOCK_ATTENDANCE_EMPLOYEE[entityId] = {};
-    if (!MOCK_ATTENDANCE_EMPLOYEE[entityId][month]) MOCK_ATTENDANCE_EMPLOYEE[entityId][month] = {};
-    MOCK_ATTENDANCE_EMPLOYEE[entityId][month][date] = { status, workingHours: workingHours || (status === 'present' ? 8 : 0) };
+
+    await prisma.employeeAttendance.upsert({
+      where: { employeeId_date: { employeeId: entityId, date: day } },
+      update: { status: statusDb, workingHours: hours },
+      create: { employeeId: entityId, date: day, status: statusDb, workingHours: hours },
+    });
   }
 
   return sendSuccess(res, { entityType, entityId, date, status }, 'Attendance marked', 201);
@@ -593,25 +768,79 @@ const marksSchema = z.object({
   })).min(1),
 });
 
-/** POST /api/v1/admin/marks — upload marks for a student/exam */
-router.post('/marks', (req, res) => {
+/** MarksEntry rows (with exam) → [{ examId, examName, date, subjects: [...] }] (mock API shape) */
+const groupMarksByExam = (rows) => {
+  const byExam = new Map();
+  rows.forEach((e) => {
+    if (!byExam.has(e.examId)) {
+      byExam.set(e.examId, {
+        examId: e.examId,
+        examName: e.exam.name,
+        date: toDateStr(e.exam.date),
+        subjects: [],
+      });
+    }
+    byExam.get(e.examId).subjects.push({
+      subject: e.subject,
+      maxMarks: e.maxMarks,
+      obtained: e.obtained,
+    });
+  });
+  return [...byExam.values()];
+};
+
+/** POST /api/v1/admin/marks — upload marks for a student/exam (upserts exam + subject entries) */
+router.post('/marks', async (req, res) => {
   const parsed = marksSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
-  const student = MOCK_STUDENTS.find((s) => s.id === parsed.data.studentId);
+  const student = await prisma.student.findUnique({ where: { id: parsed.data.studentId } });
   if (!student) return sendError(res, 'Student not found', 404, 'NOT_FOUND');
 
-  const newExam = { examId: newId('exam'), ...parsed.data };
-  if (!MOCK_MARKS[student.id]) MOCK_MARKS[student.id] = [];
-  MOCK_MARKS[student.id].push(newExam);
-  return sendSuccess(res, newExam, 'Marks uploaded', 201);
+  const examDate = apiDate(parsed.data.date) || new Date();
+  const exam = await prisma.exam.upsert({
+    where: { classId_name: { classId: student.classId, name: parsed.data.examName } },
+    update: { date: examDate },
+    create: { id: newId('exam'), classId: student.classId, name: parsed.data.examName, date: examDate },
+  });
+
+  for (const s of parsed.data.subjects) {
+    await prisma.marksEntry.upsert({
+      where: { studentId_examId_subject: { studentId: student.id, examId: exam.id, subject: s.subject } },
+      update: { maxMarks: s.maxMarks, obtained: s.obtained },
+      create: { studentId: student.id, examId: exam.id, subject: s.subject, maxMarks: s.maxMarks, obtained: s.obtained },
+    });
+  }
+
+  return sendSuccess(res, {
+    examId: exam.id,
+    studentId: student.id,
+    examName: exam.name,
+    date: toDateStr(exam.date),
+    subjects: parsed.data.subjects,
+  }, 'Marks uploaded', 201);
 });
 
-/** GET /api/v1/admin/marks?studentId= — list marks */
-router.get('/marks', (req, res) => {
+/** GET /api/v1/admin/marks?studentId= — marks grouped per exam (object keyed by student when unfiltered) */
+router.get('/marks', async (req, res) => {
   const { studentId } = req.query;
-  if (studentId) return sendSuccess(res, MOCK_MARKS[studentId] || []);
-  return sendSuccess(res, MOCK_MARKS);
+  const entries = await prisma.marksEntry.findMany({
+    where: studentId ? { studentId } : undefined,
+    include: { exam: true },
+    orderBy: [{ exam: { date: 'asc' } }, { subject: 'asc' }],
+  });
+
+  if (studentId) return sendSuccess(res, groupMarksByExam(entries));
+
+  // No studentId → same shape the mock store served: object keyed by studentId
+  const byStudent = new Map();
+  entries.forEach((e) => {
+    if (!byStudent.has(e.studentId)) byStudent.set(e.studentId, []);
+    byStudent.get(e.studentId).push(e);
+  });
+  const out = {};
+  byStudent.forEach((rows, sid) => { out[sid] = groupMarksByExam(rows); });
+  return sendSuccess(res, out);
 });
 
 /* ---------- Timetable ---------- */
@@ -626,28 +855,44 @@ const periodSchema = z.object({
   room: z.string().min(1).max(50),
 });
 
-/** GET /api/v1/admin/timetable — all class timetables */
-router.get('/timetable', (req, res) => sendSuccess(res, MOCK_TIMETABLE));
+/** GET /api/v1/admin/timetable — all class timetables, grouped by class id */
+router.get('/timetable', async (req, res) => {
+  const rows = await prisma.timetablePeriod.findMany({ orderBy: [{ classId: 'asc' }, { period: 'asc' }] });
+  const out = {};
+  rows.forEach((p) => {
+    if (!out[p.classId]) out[p.classId] = [];
+    out[p.classId].push(mapPeriod(p));
+  });
+  return sendSuccess(res, out);
+});
 
 /** POST /api/v1/admin/timetable — add a period */
-router.post('/timetable', (req, res) => {
+router.post('/timetable', async (req, res) => {
   const parsed = periodSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
-  const { classKey, ...period } = parsed.data;
-  if (!MOCK_TIMETABLE[classKey]) MOCK_TIMETABLE[classKey] = [];
-  MOCK_TIMETABLE[classKey].push(period);
-  MOCK_TIMETABLE[classKey].sort((a, b) => a.period - b.period);
-  return sendSuccess(res, period, 'Period added', 201);
+  const cls = await prisma.class.findUnique({ where: { id: parsed.data.classKey } });
+  if (!cls) return sendError(res, 'Class not found', 404, 'NOT_FOUND');
+
+  const { classKey, teacher, ...period } = parsed.data;
+  try {
+    const created = await prisma.timetablePeriod.create({
+      data: { classId: cls.id, teacherName: teacher, ...period },
+    });
+    return sendSuccess(res, mapPeriod(created), 'Period added', 201);
+  } catch (err) {
+    if (err.code === 'P2002') return sendError(res, `Period ${period.period} already exists for ${classKey}`, 409, 'DUPLICATE');
+    throw err;
+  }
 });
 
 /** DELETE /api/v1/admin/timetable/:classKey/:period */
-router.delete('/timetable/:classKey/:period', (req, res) => {
+router.delete('/timetable/:classKey/:period', async (req, res) => {
   const { classKey, period } = req.params;
-  const list = MOCK_TIMETABLE[classKey] || [];
-  const idx = list.findIndex((p) => String(p.period) === period);
-  if (idx === -1) return sendError(res, 'Period not found', 404, 'NOT_FOUND');
-  list.splice(idx, 1);
+  const deleted = await prisma.timetablePeriod.deleteMany({
+    where: { classId: classKey, period: Number(period) },
+  });
+  if (deleted.count === 0) return sendError(res, 'Period not found', 404, 'NOT_FOUND');
   return sendSuccess(res, { classKey, period }, 'Period deleted');
 });
 
@@ -660,22 +905,34 @@ const syllabusSchema = z.object({
   completedPercent: z.number().min(0).max(100),
 });
 
-/** GET /api/v1/admin/syllabus — all class syllabus records */
-router.get('/syllabus', (req, res) => sendSuccess(res, MOCK_SYLLABUS));
+/** GET /api/v1/admin/syllabus — all class syllabus records, grouped by class id */
+router.get('/syllabus', async (req, res) => {
+  const rows = await prisma.syllabusEntry.findMany({ orderBy: [{ classId: 'asc' }, { subject: 'asc' }] });
+  const out = {};
+  rows.forEach((s) => {
+    if (!out[s.classId]) out[s.classId] = [];
+    out[s.classId].push({ subject: s.subject, topics: s.topics, completedPercent: s.completedPercent });
+  });
+  return sendSuccess(res, out);
+});
 
-/** POST /api/v1/admin/syllabus */
-router.post('/syllabus', (req, res) => {
+/** POST /api/v1/admin/syllabus — create or replace a class/subject syllabus (upsert) */
+router.post('/syllabus', async (req, res) => {
   const parsed = syllabusSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
+  const cls = await prisma.class.findUnique({ where: { id: parsed.data.classKey } });
+  if (!cls) return sendError(res, 'Class not found', 404, 'NOT_FOUND');
+
   const { classKey, ...entry } = parsed.data;
-  if (!MOCK_SYLLABUS[classKey]) MOCK_SYLLABUS[classKey] = [];
-  const existing = MOCK_SYLLABUS[classKey].findIndex((s) => s.subject === entry.subject);
-  if (existing !== -1) {
-    MOCK_SYLLABUS[classKey][existing] = entry;
+  const existing = await prisma.syllabusEntry.findUnique({
+    where: { classId_subject: { classId: cls.id, subject: entry.subject } },
+  });
+  if (existing) {
+    await prisma.syllabusEntry.update({ where: { id: existing.id }, data: entry });
     return sendSuccess(res, entry, 'Syllabus updated');
   }
-  MOCK_SYLLABUS[classKey].push(entry);
+  await prisma.syllabusEntry.create({ data: { classId: cls.id, ...entry } });
   return sendSuccess(res, entry, 'Syllabus uploaded', 201);
 });
 
@@ -689,41 +946,40 @@ const achievementSchema = z.object({
   type: z.enum(['academic', 'sports', 'cultural', 'other']),
 });
 
-/** GET /api/v1/admin/achievements — flattened list with student names */
-router.get('/achievements', (req, res) => {
-  const list = [];
-  Object.entries(MOCK_ACHIEVEMENTS).forEach(([studentId, items]) => {
-    const student = MOCK_STUDENTS.find((s) => s.id === studentId);
-    items.forEach((a) => list.push({ ...a, studentId, studentName: student?.name || studentId }));
+/** GET /api/v1/admin/achievements — flattened list with student names, newest first */
+router.get('/achievements', async (req, res) => {
+  const rows = await prisma.achievement.findMany({
+    include: { student: { select: { name: true } } },
+    orderBy: { date: 'desc' },
   });
-  list.sort((a, b) => (a.date < b.date ? 1 : -1));
-  return sendSuccess(res, list);
+  return sendSuccess(res, rows.map(mapAchievement));
 });
 
 /** POST /api/v1/admin/achievements */
-router.post('/achievements', (req, res) => {
+router.post('/achievements', async (req, res) => {
   const parsed = achievementSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
   const { studentId, ...rest } = parsed.data;
-  const student = MOCK_STUDENTS.find((s) => s.id === studentId);
+  const student = await prisma.student.findUnique({ where: { id: studentId } });
   if (!student) return sendError(res, 'Student not found', 404, 'NOT_FOUND');
 
-  const newAchievement = { id: newId('ach'), ...rest };
-  if (!MOCK_ACHIEVEMENTS[studentId]) MOCK_ACHIEVEMENTS[studentId] = [];
-  MOCK_ACHIEVEMENTS[studentId].push(newAchievement);
-  return sendSuccess(res, newAchievement, 'Achievement added', 201);
+  const id = newId('ach');
+  await prisma.achievement.create({
+    data: { id, studentId, ...rest, date: apiDate(rest.date) },
+  });
+  return sendSuccess(res, { id, ...rest }, 'Achievement added', 201);
 });
 
 /** DELETE /api/v1/admin/achievements/:id */
-router.delete('/achievements/:id', (req, res) => {
-  let removed = null;
-  Object.keys(MOCK_ACHIEVEMENTS).forEach((studentId) => {
-    const idx = MOCK_ACHIEVEMENTS[studentId].findIndex((a) => a.id === req.params.id);
-    if (idx !== -1) removed = MOCK_ACHIEVEMENTS[studentId].splice(idx, 1)[0];
-  });
-  if (!removed) return sendError(res, 'Achievement not found', 404, 'NOT_FOUND');
-  return sendSuccess(res, { id: removed.id }, 'Achievement deleted');
+router.delete('/achievements/:id', async (req, res) => {
+  try {
+    await prisma.achievement.delete({ where: { id: req.params.id } });
+    return sendSuccess(res, { id: req.params.id }, 'Achievement deleted');
+  } catch (err) {
+    if (err.code === 'P2025') return sendError(res, 'Achievement not found', 404, 'NOT_FOUND');
+    throw err;
+  }
 });
 
 /* ---------- Documents ---------- */
@@ -734,47 +990,57 @@ const documentSchema = z.object({
 });
 
 /** POST /api/v1/admin/employees/:id/documents — upload document record */
-router.post('/employees/:id/documents', (req, res) => {
+router.post('/employees/:id/documents', async (req, res) => {
   const parsed = documentSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
-  const employee = MOCK_EMPLOYEES.find((e) => e.id === req.params.id);
+  const employee = await prisma.employee.findUnique({ where: { id: req.params.id } });
   if (!employee) return sendError(res, 'Employee not found', 404, 'NOT_FOUND');
 
-  const newDoc = { id: newId('doc'), uploadedAt: new Date().toISOString(), ...parsed.data };
-  if (!MOCK_DOCUMENTS[employee.id]) MOCK_DOCUMENTS[employee.id] = [];
-  MOCK_DOCUMENTS[employee.id].unshift(newDoc);
-  return sendSuccess(res, newDoc, 'Document uploaded', 201);
+  const created = await prisma.employeeDocument.create({
+    data: { id: newId('doc'), employeeId: employee.id, ...parsed.data },
+  });
+  return sendSuccess(res, {
+    id: created.id,
+    type: created.type,
+    fileName: created.fileName,
+    uploadedAt: toIso(created.uploadedAt),
+  }, 'Document uploaded', 201);
 });
 
-/** GET /api/v1/admin/documents — flattened list with employee names */
-router.get('/documents', (req, res) => {
-  const list = [];
-  Object.entries(MOCK_DOCUMENTS).forEach(([employeeId, items]) => {
-    const employee = MOCK_EMPLOYEES.find((e) => e.id === employeeId);
-    items.forEach((d) => list.push({ ...d, employeeId, employeeName: employee?.name || employeeId }));
+/** GET /api/v1/admin/documents — flattened list with employee names, newest first */
+router.get('/documents', async (req, res) => {
+  const rows = await prisma.employeeDocument.findMany({
+    include: { employee: { select: { name: true } } },
+    orderBy: { uploadedAt: 'desc' },
   });
-  list.sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1));
-  return sendSuccess(res, list);
+  return sendSuccess(res, rows.map((d) => ({
+    id: d.id,
+    type: d.type,
+    fileName: d.fileName,
+    uploadedAt: toIso(d.uploadedAt),
+    employeeId: d.employeeId,
+    employeeName: d.employee?.name || null,
+  })));
 });
 
 /** DELETE /api/v1/admin/documents/:id — remove a document record */
-router.delete('/documents/:id', (req, res) => {
-  let removed = null;
-  Object.keys(MOCK_DOCUMENTS).forEach((employeeId) => {
-    const idx = MOCK_DOCUMENTS[employeeId].findIndex((d) => d.id === req.params.id);
-    if (idx !== -1) removed = MOCK_DOCUMENTS[employeeId].splice(idx, 1)[0];
-  });
-  if (!removed) return sendError(res, 'Document not found', 404, 'NOT_FOUND');
-  return sendSuccess(res, { id: removed.id }, 'Document deleted');
+router.delete('/documents/:id', async (req, res) => {
+  try {
+    await prisma.employeeDocument.delete({ where: { id: req.params.id } });
+    return sendSuccess(res, { id: req.params.id }, 'Document deleted');
+  } catch (err) {
+    if (err.code === 'P2025') return sendError(res, 'Document not found', 404, 'NOT_FOUND');
+    throw err;
+  }
 });
 
 /* ---------- Users / Password reset ---------- */
 
 /** GET /api/v1/admin/users — sanitized user list (never includes password hashes) */
-router.get('/users', (req, res) => {
-  const users = MOCK_USERS.map(({ passwordHash, ...safe }) => safe);
-  return sendSuccess(res, users);
+router.get('/users', async (req, res) => {
+  const users = await prisma.user.findMany({ orderBy: { id: 'asc' } });
+  return sendSuccess(res, users.map(({ passwordHash, ...safe }) => safe));
 });
 
 const resetPasswordSchema = z.object({
@@ -786,31 +1052,58 @@ router.put('/users/:id/reset-password', async (req, res) => {
   const parsed = resetPasswordSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
-  const user = MOCK_USERS.find((u) => u.id === req.params.id);
+  const user = await prisma.user.findUnique({ where: { id: req.params.id } });
   if (!user) return sendError(res, 'User not found', 404, 'NOT_FOUND');
 
-  user.passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
+  await prisma.user.update({
+    where: { id: req.params.id },
+    data: { passwordHash: await bcrypt.hash(parsed.data.newPassword, 10) },
+  });
   return sendSuccess(res, null, 'Password reset successfully');
 });
 
 /* ---------- Audit log ---------- */
 
-/** GET /api/v1/admin/audit-log — newest-first trail of admin mutations */
-router.get('/audit-log', (req, res) => sendSuccess(res, MOCK_AUDIT_LOG));
+/**
+ * GET /api/v1/admin/audit-log — newest-first trail of admin mutations.
+ * DB rows ({ actorUserId, message: 'METHOD /url', createdAt }) are mapped back
+ * to the mock API shape the frontend expects: { actor, method, route, at }.
+ */
+router.get('/audit-log', async (req, res) => {
+  const rows = await prisma.auditEntry.findMany({ orderBy: { createdAt: 'desc' }, take: 200 });
+  return sendSuccess(res, rows.map((e) => {
+    const spaceIdx = e.message.indexOf(' ');
+    return {
+      id: e.id,
+      actor: e.actorUserId,
+      entityType: e.entityType,
+      entityId: e.entityId,
+      method: spaceIdx === -1 ? e.message : e.message.slice(0, spaceIdx),
+      route: spaceIdx === -1 ? '' : e.message.slice(spaceIdx + 1),
+      at: toIso(e.createdAt),
+    };
+  }));
+});
 
 /* ---------- Reports ---------- */
 
 /** GET /api/v1/admin/reports/summary — key stats for the admin dashboard */
-router.get('/reports/summary', (req, res) => {
-  const pendingLeaves = Object.values(MOCK_LEAVES)
-    .reduce((sum, data) => sum + data.history.filter((l) => l.status === 'pending').length, 0);
+router.get('/reports/summary', async (req, res) => {
+  const [totalStudents, totalEmployees, feeAgg, totalAnnouncements, totalHolidays, pendingLeaves] = await Promise.all([
+    prisma.student.count(),
+    prisma.employee.count(),
+    prisma.student.aggregate({ _sum: { feeDues: true } }),
+    prisma.announcement.count(),
+    prisma.holiday.count(),
+    prisma.leaveRequest.count({ where: { status: 'pending' } }),
+  ]);
 
   return sendSuccess(res, {
-    totalStudents: MOCK_STUDENTS.length,
-    totalEmployees: MOCK_EMPLOYEES.length,
-    totalFeeDues: MOCK_STUDENTS.reduce((s, x) => s + (x.feeDues || 0), 0),
-    totalAnnouncements: MOCK_ANNOUNCEMENTS.length,
-    totalHolidays: MOCK_HOLIDAYS.length,
+    totalStudents,
+    totalEmployees,
+    totalFeeDues: feeAgg._sum.feeDues || 0,
+    totalAnnouncements,
+    totalHolidays,
     pendingLeaves,
   });
 });

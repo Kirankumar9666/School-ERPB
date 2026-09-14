@@ -126,7 +126,9 @@ model Student {
   classId         String
   class           Class    @relation(fields: [classId], references: [id])
   admissionYear   Int?
-  rollNumber      String?  @unique
+  // Roll numbers are unique per class (two classes can each have their own
+  // 'STU-2026-001'), not globally — see @@unique below.
+  rollNumber      String?
   feeTotal        Int?
   feeDues         Int?
   parentName      String?
@@ -140,6 +142,7 @@ model Student {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  @@unique([classId, rollNumber])
   @@index([classId])
 }
 
