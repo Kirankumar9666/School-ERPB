@@ -205,6 +205,22 @@ model EmployeeAttendance {
   @@index([date])
 }
 
+// One row per (kind, group, day) each time a bulk attendance save is
+// confirmed — confirmedAt drives the 1-hour edit window on the admin
+// attendance screen. kind: 'student' (groupKey = class id) or 'employee'
+// (groupKey = designation).
+model AttendanceConfirmation {
+  id          String   @id @default(cuid())
+  kind        String
+  groupKey    String
+  date        DateTime @db.Date
+  confirmedAt DateTime @default(now())
+  markedBy    String?
+
+  @@unique([kind, groupKey, date])
+  @@index([date])
+}
+
 // ─── Marks ──────────────────────────────────────────────────────────────────
 
 model Exam {

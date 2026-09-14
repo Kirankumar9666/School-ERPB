@@ -819,6 +819,187 @@ router.post('/attendance', async (req, res) => {
   return sendSuccess(res, { entityType, entityId, date, status }, 'Attendance marked', 201);
 });
 
+/* ---------- Bulk attendance (class / staff-group screen) ---------- */
+
+/** Milliseconds after a confirmed save during which the same day stays editable. */
+const ATTENDANCE_EDIT_WINDOW_MS = 60 * 60 * 1000;
+
+/**
+ * Load one attendance group with its members, derived live from the tables:
+ * kind 'student' → a Class row (groupKey = class id), kind 'employee' → every
+ * employee sharing a designation (groupKey = the designation string).
+ * Returns { label, members } or null when the group does not exist.
+ */
+const attendanceGroup = async (kind, groupKey) => {
+  if (kind === 'student') {
+    const klass = await prisma.class.findUnique({
+      where: { id: groupKey },
+      include: { students: { orderBy: { rollNumber: 'asc' } } },
+    });
+    if (!klass) return null;
+    return { label: `${klass.grade} - Class ${klass.section}`, members: klass.students };
+  }
+  const members = await prisma.employee.findMany({
+    where: { designation: groupKey },
+    orderBy: { name: 'asc' },
+  });
+  if (members.length === 0) return null;
+  return { label: groupKey, members };
+};
+
+/** Confirmation row → API payload with the derived 1-hour edit-window state. */
+const confirmationPayload = (row) => {
+  if (!row) return null;
+  return {
+    confirmedAt: toIso(row.confirmedAt),
+    withinEditWindow: Date.now() - row.confirmedAt.getTime() < ATTENDANCE_EDIT_WINDOW_MS,
+  };
+};
+
+/**
+ * GET /api/v1/admin/attendance/group?kind=student|employee&groupKey=...&date=YYYY-MM-DD
+ * Roster of one group with each member's saved status for the date (null =
+ * unmarked) plus the confirmation state that drives the 1-hour edit window.
+ * Students are ordered by roll number, employees by name.
+ */
+router.get('/attendance/group', async (req, res) => {
+  const kind = String(req.query.kind || '');
+  const groupKey = String(req.query.groupKey || '').trim();
+  const dateQ = String(req.query.date || '').trim();
+
+  if (!['student', 'employee'].includes(kind)) {
+    return sendError(res, 'kind must be "student" or "employee"', 400, 'VALIDATION_ERROR');
+  }
+  if (!groupKey) return sendError(res, 'groupKey is required', 400, 'VALIDATION_ERROR');
+  if (!dateStr.safeParse(dateQ).success) {
+    return sendError(res, 'date must be YYYY-MM-DD', 400, 'VALIDATION_ERROR');
+  }
+
+  const group = await attendanceGroup(kind, groupKey);
+  if (!group) {
+    return sendError(res, kind === 'student' ? 'Class not found' : 'Staff group not found', 404, 'NOT_FOUND');
+  }
+
+  const day = apiDate(dateQ);
+  const ids = group.members.map((m) => m.id);
+  const rows = ids.length
+    ? await (kind === 'student'
+      ? prisma.studentAttendance.findMany({ where: { studentId: { in: ids }, date: day } })
+      : prisma.employeeAttendance.findMany({ where: { employeeId: { in: ids }, date: day } }))
+    : [];
+  const statusById = new Map(rows.map((r) => [(kind === 'student' ? r.studentId : r.employeeId), statusToApi(r.status)]));
+
+  const confirmation = await prisma.attendanceConfirmation.findUnique({
+    where: { kind_groupKey_date: { kind, groupKey, date: day } },
+  });
+
+  return sendSuccess(res, {
+    kind,
+    groupKey,
+    date: dateQ,
+    label: group.label,
+    count: group.members.length,
+    members: group.members.map((m) => ({
+      id: m.id,
+      name: m.name,
+      /* Same field names as the students API so the roster rows and the
+         "Check student" selector render identically for both kinds. */
+      rollNumber: kind === 'student' ? m.rollNumber : m.employeeId,
+      parentName: kind === 'student' ? m.parentName : m.designation,
+      guardianContact: kind === 'student' ? m.guardianContact : m.mobile,
+      status: statusById.get(m.id) ?? null,
+    })),
+    confirmation: confirmationPayload(confirmation),
+  });
+});
+
+const bulkAttendanceSchema = z.object({
+  kind: z.enum(['student', 'employee']),
+  groupKey: z.string().min(1),
+  date: dateStr,
+  /** Explicit "Edit past attendance" — lifts the closed 1-hour window. */
+  override: z.boolean().optional(),
+  entries: z.array(z.object({
+    entityId: z.string().min(1),
+    status: z.enum(Object.values(AttendanceStatus).map(statusToApi)),
+  })).min(1),
+});
+
+/**
+ * POST /api/v1/admin/attendance/bulk — save a whole group's attendance for one
+ * date in a single transaction: every entry as given ('absent' toggles,
+ * everything sent as 'present' for the rest of the roster the UI lists).
+ * Atomic — an unknown member id or a failed write leaves no partial rows.
+ * Re-confirming within the 1-hour window overwrites; after it closes the
+ * request must carry override: true (the explicit "Edit past attendance" path).
+ */
+router.post('/attendance/bulk', async (req, res) => {
+  const parsed = bulkAttendanceSchema.safeParse(req.body);
+  if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
+
+  const { kind, groupKey, date, entries, override } = parsed.data;
+  const day = apiDate(date);
+
+  const group = await attendanceGroup(kind, groupKey);
+  if (!group) {
+    return sendError(res, kind === 'student' ? 'Class not found' : 'Staff group not found', 404, 'NOT_FOUND');
+  }
+
+  // Every entry must belong to this group — rejects stale/foreign ids before
+  // anything is written (atomicity guard).
+  const memberIds = new Set(group.members.map((m) => m.id));
+  const unknown = entries.filter((e) => !memberIds.has(e.entityId)).map((e) => e.entityId);
+  if (unknown.length) {
+    return sendError(res, `Entries not in this ${kind === 'student' ? 'class' : 'group'}: ${unknown.join(', ')}`, 400, 'VALIDATION_ERROR');
+  }
+
+  const existing = await prisma.attendanceConfirmation.findUnique({
+    where: { kind_groupKey_date: { kind, groupKey, date: day } },
+  });
+  if (existing && !override && Date.now() - existing.confirmedAt.getTime() >= ATTENDANCE_EDIT_WINDOW_MS) {
+    return sendError(res, 'The 1-hour edit window for this attendance has closed', 403, 'EDIT_LOCKED');
+  }
+
+  const confirmedAt = new Date();
+  const markedBy = req.user?.username || null;
+
+  await prisma.$transaction(async (tx) => {
+    for (const e of entries) {
+      const statusDb = statusToDb(e.status);
+      if (kind === 'student') {
+        await tx.studentAttendance.upsert({
+          where: { studentId_date: { studentId: e.entityId, date: day } },
+          update: { status: statusDb },
+          create: { studentId: e.entityId, date: day, status: statusDb },
+        });
+      } else {
+        const workingHours = e.status === 'absent' ? 0 : 8;
+        await tx.employeeAttendance.upsert({
+          where: { employeeId_date: { employeeId: e.entityId, date: day } },
+          update: { status: statusDb, workingHours },
+          create: { employeeId: e.entityId, date: day, status: statusDb, workingHours },
+        });
+      }
+    }
+    await tx.attendanceConfirmation.upsert({
+      where: { kind_groupKey_date: { kind, groupKey, date: day } },
+      update: { confirmedAt, markedBy },
+      create: { kind, groupKey, date: day, confirmedAt, markedBy },
+    });
+  });
+
+  const absent = entries.filter((e) => e.status === 'absent').length;
+  return sendSuccess(res, {
+    kind,
+    groupKey,
+    date,
+    saved: entries.length,
+    absent,
+    present: entries.length - absent,
+    confirmedAt: toIso(confirmedAt),
+  }, 'Attendance confirmed', 201);
+});
+
 /* ---------- Marks ---------- */
 
 const marksSchema = z.object({
