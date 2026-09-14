@@ -2,23 +2,22 @@ import { useEffect, useState } from 'react';
 import { Umbrella, Send, Info } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
+import { loadOptions, optionLabel } from '../../services/options';
 import toast from 'react-hot-toast';
 
-const LEAVE_TYPES = [
-  { value: 'casual', label: 'Casual Leave' },
-  { value: 'sick', label: 'Sick Leave' },
-  { value: 'earned', label: 'Earned Leave' },
-];
-
+/** Leave requests are "pending" until an admin decides (LeaveStatus enum) */
 const LEAVE_STATUS_BADGE = { pending: 'badge-pending', approved: 'badge-approved', rejected: 'badge-rejected' };
 
 /**
  * Employee Leave — apply + history + balance tracker.
+ * The leave-type list is the LeaveType enum served by /school/options, so the
+ * form can never offer a type the API would reject.
  */
 export default function EmployeeLeave() {
   const { user } = useAuth();
   const [data, setData] = useState(null);
-  const [form, setForm] = useState({ type: 'casual', fromDate: '', toDate: '', reason: '' });
+  const [leaveTypes, setLeaveTypes] = useState([]);
+  const [form, setForm] = useState({ type: '', fromDate: '', toDate: '', reason: '' });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -26,8 +25,12 @@ export default function EmployeeLeave() {
 
   useEffect(() => {
     if (!empId) return;
-    api.get(`/employees/${empId}/leaves`)
-      .then((r) => setData(r.data.data))
+    Promise.all([api.get(`/employees/${empId}/leaves`), loadOptions()])
+      .then(([r, o]) => {
+        setData(r.data.data);
+        setLeaveTypes(o.enums.leaveTypes);
+        setForm((f) => ({ ...f, type: f.type || o.enums.leaveTypes[0] || '' }));
+      })
       .finally(() => setLoading(false));
   }, [empId]);
 
@@ -48,7 +51,7 @@ export default function EmployeeLeave() {
         type: form.type, fromDate: form.fromDate, toDate: form.toDate, reason: form.reason.trim(),
       });
       toast.success('Leave application submitted!');
-      setForm({ type: 'casual', fromDate: '', toDate: '', reason: '' });
+      setForm((f) => ({ ...f, type: leaveTypes[0] || '', fromDate: '', toDate: '', reason: '' }));
       const r = await api.get(`/employees/${empId}/leaves`);
       setData(r.data.data);
     } catch (err) {
@@ -98,7 +101,7 @@ export default function EmployeeLeave() {
                 value={form.type}
                 onChange={(e) => setForm({ ...form, type: e.target.value })}
               >
-                {LEAVE_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                {leaveTypes.map((t) => <option key={t} value={t}>{optionLabel(t)}</option>)}
               </select>
             </div>
 

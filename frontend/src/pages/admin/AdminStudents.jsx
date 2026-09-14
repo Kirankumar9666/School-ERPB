@@ -2,11 +2,16 @@ import { useEffect, useState } from 'react';
 import { GraduationCap, Plus, Pencil, Trash, ChevronDown, Search, Upload } from 'lucide-react';
 import Modal from '../../components/Modal';
 import api from '../../services/api';
+import { loadOptions } from '../../services/options';
 import toast from 'react-hot-toast';
 import studentForm from './studentForm';
 
+/**
+ * Blank form. Class/section start empty and are seeded from the classes that
+ * exist in the database when the modal opens — no hardcoded grade/section.
+ */
 const EMPTY_FORM = {
-  name: '', class: '10', section: 'A', rollNumber: '', parentName: '', guardianContact: '',
+  name: '', class: '', section: '', rollNumber: '', parentName: '', guardianContact: '',
   admissionYear: '', bloodGroup: '', dob: '', feeTotal: '', feeDues: '', address: '',
 };
 
@@ -34,6 +39,7 @@ const downloadTemplate = () => {
 export default function AdminStudents() {
   const [classes, setClasses] = useState([]);
   const [students, setStudents] = useState([]);
+  const [options, setOptions] = useState({ enums: {}, classes: [] });
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(null); // class key currently expanded
@@ -46,9 +52,11 @@ export default function AdminStudents() {
     Promise.all([
       api.get('/admin/students/by-class', { params: query ? { q: query } : undefined }),
       api.get('/admin/students'),
-    ]).then(([c, s]) => {
+      loadOptions(), // classes are re-read because this page can create them
+    ]).then(([c, s, o]) => {
       setClasses(c.data.data);
       setStudents(s.data.data);
+      setOptions(o);
     });
 
   useEffect(() => {
@@ -61,7 +69,9 @@ export default function AdminStudents() {
   };
 
   const openCreate = () => {
-    setForm({ ...EMPTY_FORM });
+    // Default to a class that exists (first by grade), never a fixed grade/section
+    const first = options.classes[0];
+    setForm({ ...EMPTY_FORM, class: first?.grade || '', section: first?.section || '' });
     setError('');
     setModal({ mode: 'create' });
   };
@@ -290,7 +300,7 @@ export default function AdminStudents() {
           }
         >
           {error && <div className="login-error" style={{ marginBottom: 'var(--sp-md)' }}>{error}</div>}
-          {studentForm(form, setForm)}
+          {studentForm(form, setForm, options)}
         </Modal>
       )}
 

@@ -1,25 +1,32 @@
 import { useEffect, useState } from 'react';
 import { Trophy, Plus, Trash } from 'lucide-react';
 import api from '../../services/api';
+import { loadOptions, optionLabel } from '../../services/options';
 import toast from 'react-hot-toast';
-
-const TYPES = ['academic', 'sports', 'cultural', 'other'];
 
 /**
  * Admin Achievements — record and manage student achievements.
+ * The type list is validated server-side (see constants/options.js) and served
+ * by /school/options, so the UI never keeps its own copy.
  */
 export default function AdminAchievements() {
   const [achievements, setAchievements] = useState([]);
   const [students, setStudents] = useState([]);
+  const [types, setTypes] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [form, setForm] = useState({ studentId: '', title: '', description: '', date: '', type: 'academic' });
+  const [form, setForm] = useState({ studentId: '', title: '', description: '', date: '', type: '' });
   const [saving, setSaving] = useState(false);
 
   const load = () =>
-    Promise.all([api.get('/admin/achievements'), api.get('/admin/students')]).then(([a, s]) => {
+    Promise.all([api.get('/admin/achievements'), api.get('/admin/students'), loadOptions()]).then(([a, s, o]) => {
       setAchievements(a.data.data);
       setStudents(s.data.data);
-      setForm((f) => ({ ...f, studentId: f.studentId || s.data.data[0]?.id || '' }));
+      setTypes(o.enums.achievementTypes);
+      setForm((f) => ({
+        ...f,
+        studentId: f.studentId || s.data.data[0]?.id || '',
+        type: f.type || o.enums.achievementTypes[0] || '',
+      }));
     });
 
   useEffect(() => {
@@ -42,7 +49,7 @@ export default function AdminAchievements() {
         type: form.type,
       });
       toast.success('Achievement added!');
-      setForm({ studentId: form.studentId, title: '', description: '', date: '', type: 'academic' });
+      setForm({ studentId: form.studentId, title: '', description: '', date: '', type: types[0] || '' });
       await load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Could not add achievement.');
@@ -88,7 +95,7 @@ export default function AdminAchievements() {
               <div className="form-group">
                 <label className="form-label">Type *</label>
                 <select className="form-input" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
-                  {TYPES.map((t) => <option key={t} value={t}>{t[0].toUpperCase() + t.slice(1)}</option>)}
+                  {types.map((t) => <option key={t} value={t}>{optionLabel(t)}</option>)}
                 </select>
               </div>
             </div>

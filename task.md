@@ -187,7 +187,7 @@
 - [x] Verify all file downloads use signed URLs (not public links) — N/A: all downloads are generated client-side (CSV/print); no public file URLs exist
 - [x] Sanitize all user inputs (zod/joi validation on every endpoint) — verified on all write endpoints incl. `/auth/refresh` (schema added); student/employee routes are GET-only, params validated server-side
 - [x] Confirm passwords are never logged or returned in API responses — verified: login/reset responses omit hashes, `GET /admin/users` strips `passwordHash`, morgan logs request lines only, audit log never captures bodies
-- [x] Setup audit log table for admin actions — `src/mock/audit.js` + router-level audit middleware on all admin mutations + `GET /admin/audit-log` (newest-first, 500-entry cap)
+- [x] Setup audit log table for admin actions — router-level audit middleware on all admin mutations writes `AuditEntry` rows + `GET /admin/audit-log` (newest-first, reads the DB table)
 - [x] Run `npm audit` — fix critical/high vulnerabilities — 0 vulnerabilities in backend and frontend
 - [x] JWT secrets fail-fast — production startup throws if `JWT_SECRET`/`JWT_REFRESH_SECRET` missing; dev uses a labelled insecure fallback + warning
 

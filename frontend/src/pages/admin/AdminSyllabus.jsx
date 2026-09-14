@@ -1,29 +1,45 @@
 import { useEffect, useState } from 'react';
 import { Upload, Plus, BookMarked } from 'lucide-react';
 import api from '../../services/api';
+import { loadOptions } from '../../services/options';
+import { classChoices } from '../../utils/classes';
 import toast from 'react-hot-toast';
-
-const CLASS_KEYS = ['cls-10A', 'cls-9B'];
 
 const EMPTY = { subject: '', topics: '', completedPercent: '0' };
 
 /**
  * Admin Syllabus — upload / update syllabus coverage per class and subject.
  * Backend upserts by (classKey, subject), so re-submitting a subject updates it.
+ * The class selector lists the classes that exist in the database
+ * (GET /school/options) plus any class the payload already references.
  */
 export default function AdminSyllabus() {
   const [syllabus, setSyllabus] = useState({});
+  const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [classKey, setClassKey] = useState(CLASS_KEYS[0]);
+  const [classKey, setClassKey] = useState('');
   const [form, setForm] = useState(EMPTY);
   const [editingSubject, setEditingSubject] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  const load = () => api.get('/admin/syllabus').then((r) => setSyllabus(r.data.data || {}));
+  /** Fetch the syllabus map (classId → entries) */
+  const fetchSyllabus = () => api.get('/admin/syllabus').then((r) => r.data.data || {});
+  const load = () => fetchSyllabus().then(setSyllabus);
 
   useEffect(() => {
-    load().finally(() => setLoading(false));
+    Promise.all([fetchSyllabus(), loadOptions()])
+      .then(([data, o]) => {
+        setSyllabus(data);
+        setClasses(o.classes);
+        // Prefer a class that already has entries, else the first real class
+        setClassKey((current) => current || Object.keys(data)[0] || o.classes[0]?.id || '');
+      })
+      .finally(() => setLoading(false));
   }, []);
+
+  /* Class options: database classes ∪ classes already in the payload, sorted */
+  const choices = classChoices(Object.keys(syllabus), classes);
+  const activeLabel = choices.find((c) => c.id === classKey)?.label || '';
 
   const startEdit = (entry) => {
     setEditingSubject(entry.subject);
@@ -84,14 +100,14 @@ export default function AdminSyllabus() {
       <div className="form-group" style={{ maxWidth: 280, marginBottom: 'var(--sp-lg)' }}>
         <label className="form-label">Select Class</label>
         <select className="form-input" value={classKey} onChange={(e) => { setClassKey(e.target.value); resetForm(); }}>
-          {Object.keys(syllabus).concat(CLASS_KEYS.filter((k) => !syllabus[k])).map((k) => (
-            <option key={k} value={k}>{k.replace('cls-', 'Class ')}</option>
+          {choices.map((c) => (
+            <option key={c.id} value={c.id}>{c.label}</option>
           ))}
         </select>
       </div>
 
       <div className="section">
-        <div className="section-title"><BookMarked size={14} /> Subjects — {classKey.replace('cls-', 'Class ')}</div>
+        <div className="section-title"><BookMarked size={14} /> Subjects — {activeLabel}</div>
         {entries.length === 0 ? (
           <div className="empty-state"><BookMarked size={40} />No syllabus uploaded for this class yet.</div>
         ) : (

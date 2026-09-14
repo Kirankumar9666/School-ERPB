@@ -1,10 +1,11 @@
 const express = require('express');
 const authMiddleware = require('../../middleware/auth.middleware');
 const { requireRole } = require('../../middleware/role.middleware');
-const { ROLES } = require('../../constants/roles');
+const { ROLES, EMPLOYEE_ROLES } = require('../../constants/roles');
 const { sendSuccess } = require('../../utils/response');
 const prisma = require('../../services/prisma');
 const { toDateStr, monthRange } = require('../../services/mappers');
+const { enumOptions, classOptions } = require('../../services/options');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -39,6 +40,20 @@ router.get('/holidays', async (req, res) => {
     orderBy: { date: 'asc' },
   });
   return sendSuccess(res, rows.map((h) => ({ id: h.id, date: toDateStr(h.date), name: h.name })));
+});
+
+/**
+ * GET /api/v1/school/options — reference data that fills the UI selects.
+ *
+ * `enums` is derived from the Prisma schema enums (plus the two zod-validated
+ * lists in constants/options.js), so no screen keeps its own copy of a domain
+ * list. `classes` is read from the classes table — returned to the roles that
+ * manage admissions, timetables and syllabus (admin + employees) only.
+ */
+router.get('/options', async (req, res) => {
+  const managesClasses = req.user.role === ROLES.ADMIN || EMPLOYEE_ROLES.includes(req.user.role);
+  const classes = managesClasses ? await classOptions() : [];
+  return sendSuccess(res, { enums: enumOptions(), classes });
 });
 
 /**

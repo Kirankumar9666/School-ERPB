@@ -1,25 +1,39 @@
 import { useEffect, useState } from 'react';
 import { Clock, Plus, Trash } from 'lucide-react';
 import api from '../../services/api';
+import { loadOptions } from '../../services/options';
+import { classChoices } from '../../utils/classes';
 import toast from 'react-hot-toast';
-
-const CLASS_KEYS = ['cls-10A', 'cls-9B'];
 
 /**
  * Admin Timetable — manage class schedules (add / delete periods).
+ * The class selector lists the classes that exist in the database
+ * (GET /school/options) plus any class the payload already references.
  */
 export default function AdminTimetable() {
   const [timetables, setTimetables] = useState({});
+  const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [classKey, setClassKey] = useState(CLASS_KEYS[0]);
+  const [classKey, setClassKey] = useState('');
   const [form, setForm] = useState({ period: '', timeStart: '08:00', timeEnd: '08:45', subject: '', teacher: '', room: '' });
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    api.get('/admin/timetable')
-      .then((r) => setTimetables(r.data.data || {}))
+    Promise.all([api.get('/admin/timetable'), loadOptions()])
+      .then(([t, o]) => {
+        const data = t.data.data || {};
+        setTimetables(data);
+        setClasses(o.classes);
+        // Prefer a class that already has periods, else the first real class
+        setClassKey((current) => current || Object.keys(data)[0] || o.classes[0]?.id || '');
+      })
       .finally(() => setLoading(false));
   }, []);
+
+  /* Class options: database classes ∪ classes already in the payload, sorted */
+  const choices = classChoices(Object.keys(timetables), classes);
+  const periods = timetables[classKey] || [];
+  const activeLabel = choices.find((c) => c.id === classKey)?.label || '';
 
   const handleAdd = async (e) => {
     e.preventDefault();
@@ -50,7 +64,8 @@ export default function AdminTimetable() {
   };
 
   const handleDelete = async (ck, period) => {
-    if (!window.confirm(`Delete period ${period} of class ${ck}? This cannot be undone.`)) return;
+    const label = choices.find((c) => c.id === ck)?.label || ck;
+    if (!window.confirm(`Delete period ${period} of ${label}? This cannot be undone.`)) return;
     try {
       await api.delete(`/admin/timetable/${ck}/${period}`);
       toast.success('Period removed.');
@@ -63,8 +78,6 @@ export default function AdminTimetable() {
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
 
-  const periods = timetables[classKey] || [];
-
   return (
     <div className="page fade-in">
       <div className="page-header">
@@ -75,14 +88,14 @@ export default function AdminTimetable() {
       <div className="form-group" style={{ maxWidth: 280, marginBottom: 'var(--sp-lg)' }}>
         <label className="form-label">Select Class</label>
         <select className="form-input" value={classKey} onChange={(e) => setClassKey(e.target.value)}>
-          {Object.keys(timetables).concat(CLASS_KEYS.filter((k) => !timetables[k])).map((k) => (
-            <option key={k} value={k}>{k.replace('cls-', 'Class ')}</option>
+          {choices.map((c) => (
+            <option key={c.id} value={c.id}>{c.label}</option>
           ))}
         </select>
       </div>
 
       <div className="section">
-        <div className="section-title"><Clock size={14} /> Periods — {classKey.replace('cls-', 'Class ')}</div>
+        <div className="section-title"><Clock size={14} /> Periods — {activeLabel}</div>
         {periods.length === 0 ? (
           <div className="empty-state">
             <Clock size={40} />

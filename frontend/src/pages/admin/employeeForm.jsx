@@ -1,10 +1,19 @@
+import { EMPLOYEE_ROLES } from '../../constants/roles';
+
 /**
  * Shared employee form fields used by the admin employee modal.
+ *
+ * Every select is fed from a single source: gender / employment type / account
+ * status are the Prisma schema enums served by GET /school/options, and the job
+ * role list is the shared EMPLOYEE_ROLES constant — no inline value lists.
+ *
  * @param {object} form   - current form values
  * @param {function} setForm - state setter
+ * @param {object} options - reference options ({ enums: {...} })
  */
-export default function employeeForm(form, setForm) {
+export default function employeeForm(form, setForm, options = {}) {
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  const { genders = [], employmentTypes = [], accountStatuses = [] } = options.enums || {};
   const o = (label, opts, k, extra) => (
     <div className="form-group">
       <label className="form-label">{label}*</label>
@@ -23,27 +32,17 @@ export default function employeeForm(form, setForm) {
         <label className="form-label">Employee ID</label>
         <input className="form-input" value={form.employeeId} onChange={set('employeeId')} placeholder="e.g. EMP-2026-003" />
       </div>
-      <div className="form-group">
-        <label className="form-label">Gender *</label>
-        <select className="form-input" value={form.gender} onChange={set('gender')}>
-          {['Female', 'Male', 'Other'].map((v) => <option key={v} value={v}>{v}</option>)}
-        </select>
-      </div>
+      {o('Gender', genders, 'gender')}
       <div className="form-group">
         <label className="form-label">Department *</label>
-        <input className="form-input" value={form.department} onChange={set('department')} placeholder="e.g. Mathematics" />
+        <input className="form-input" value={form.department} onChange={set('department')} placeholder="e.g. Science" />
       </div>
       <div className="form-group">
         <label className="form-label">Designation *</label>
         <input className="form-input" value={form.designation} onChange={set('designation')} placeholder="e.g. Senior Teacher" />
       </div>
-      <div className="form-group">
-        <label className="form-label">Job Role *</label>
-        <select className="form-input" value={form.role} onChange={set('role')}>
-          {['teacher', 'accountant', 'librarian'].map((v) => <option key={v} value={v}>{v}</option>)}
-        </select>
-      </div>
-      {o('Employment Type', ['Permanent', 'Contract', 'Probation', 'Temporary'], 'employmentType')}
+      {o('Job Role', EMPLOYEE_ROLES, 'role')}
+      {o('Employment Type', employmentTypes, 'employmentType')}
       <div className="form-group">
         <label className="form-label">Date of Joining</label>
         <input className="form-input" type="date" value={form.dateOfJoining} onChange={set('dateOfJoining')} />
@@ -76,7 +75,7 @@ export default function employeeForm(form, setForm) {
         <label className="form-label">Emergency Contact</label>
         <input className="form-input" value={form.emergencyContact} onChange={set('emergencyContact')} placeholder="+91-XXXXXXXXXX" />
       </div>
-      {o('Status', ['active', 'inactive'], 'status')}
+      {o('Status', accountStatuses, 'status')}
       <div className="form-group" style={{ gridColumn: '1 / -1' }}>
         <label className="form-label">Address</label>
         <textarea className="form-input" rows={2} value={form.address} onChange={set('address')} placeholder="Residential address" />

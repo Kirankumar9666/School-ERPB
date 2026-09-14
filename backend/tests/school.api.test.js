@@ -50,4 +50,44 @@ test('school summary is admin-only → 403 for others', async () => {
   assert.equal(denied.status, 403);
 });
 
+test('reference options are derived from the schema + database, never hardcoded', async () => {
+  const ok = await request(ctx.base, '/school/options', { token: admin.accessToken });
+  assert.equal(ok.status, 200);
+
+  const { enums, classes } = ok.body.data;
+
+  // Enum option lists come from the Prisma schema enums, so they cannot drift
+  // from what the write endpoints validate.
+  assert.ok(enums.genders.includes('Female'));
+  assert.ok(enums.employmentTypes.includes('Permanent'));
+  assert.ok(enums.accountStatuses.includes('active'));
+  assert.ok(enums.leaveTypes.includes('casual'));
+  assert.deepEqual(enums.attendanceStatuses, ['present', 'absent', 'late', 'half-day', 'holiday']);
+  assert.ok(enums.announcementCategories.length > 0);
+  assert.ok(enums.achievementTypes.length > 0);
+  assert.ok(enums.roles.includes('admin') && enums.roles.includes('librarian'));
+
+  // Classes + sections are the rows in the classes table, with live headcounts.
+  assert.deepEqual(classes.map((c) => c.id), ['cls-9B', 'cls-10A']); // grade asc
+  const tenA = classes.find((c) => c.id === 'cls-10A');
+  assert.equal(tenA.grade, '10');
+  assert.equal(tenA.section, 'A');
+  assert.equal(tenA.label, 'Class 10A');
+  assert.equal(tenA.studentCount, 2); // seeded 10-A students, counted from rows
+
+  // Employees manage timetables/syllabus, so they get the class list too;
+  // students get the enum lists only.
+  const staff = await request(ctx.base, '/school/options', { token: teacher.accessToken });
+  assert.equal(staff.status, 200);
+  assert.equal(staff.body.data.classes.length, 2);
+
+  const pupil = await request(ctx.base, '/school/options', { token: student.accessToken });
+  assert.equal(pupil.status, 200);
+  assert.deepEqual(pupil.body.data.classes, []);
+  assert.ok(pupil.body.data.enums.leaveTypes.includes('sick'));
+
+  const anon = await request(ctx.base, '/school/options');
+  assert.equal(anon.status, 401);
+});
+
 test('teardown — stop server', async () => { await stopServer(ctx.server); });

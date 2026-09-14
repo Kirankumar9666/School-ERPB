@@ -142,10 +142,11 @@ export default function Login() {
           Forgot your password? Contact your school administrator.
         </p>
 
-        {/* Demo credentials */}
-        <div className="demo-creds">
-          <div className="demo-creds-title">Demo Credentials — click to fill</div>
-          {DEMO_CREDENTIALS.map((cred) => (
+        {/* Demo credentials — dev convenience only; stripped from production builds */}
+        {import.meta.env.DEV && (
+          <div className="demo-creds">
+            <div className="demo-creds-title">Demo Credentials — click to fill</div>
+            {DEMO_CREDENTIALS.map((cred) => (
             <div
               key={cred.role}
               className="demo-cred-item"
@@ -161,7 +162,8 @@ export default function Login() {
               <span className="demo-cred-pass">{cred.password}</span>
             </div>
           ))}
-        </div>
+          </div>
+        )}
 
       </div>
     </div>

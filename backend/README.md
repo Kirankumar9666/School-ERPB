@@ -19,7 +19,7 @@ src/
   config/env.js    # all environment variables, fail-fast JWT secrets
   constants/       # role definitions
   middleware/      # auth (JWT), RBAC, rate limiters, admin audit
-  mock/            # in-memory data stores (users, students, employees, school)
+  mock/            # seed dataset source (consumed by prisma/seed.js and test fixtures, never at runtime)
   modules/         # routes: auth, students, employees, school, admin
   utils/           # response envelope, attendance calculations
 tests/

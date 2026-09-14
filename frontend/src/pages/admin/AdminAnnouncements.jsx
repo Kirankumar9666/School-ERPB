@@ -1,24 +1,32 @@
 import { useEffect, useState } from 'react';
 import { Bell, Send, Trash } from 'lucide-react';
 import api from '../../services/api';
+import { loadOptions, optionLabel } from '../../services/options';
 import toast from 'react-hot-toast';
 import { ROLES } from '../../constants/roles';
 
 const ROLES_LIST = Object.values(ROLES);
-const CATEGORIES = ['event', 'exam', 'holiday', 'meeting', 'general'];
 
 /**
  * Admin Announcements — create, list and delete circulars.
+ * Categories are validated server-side (constants/options.js) and served by
+ * /school/options; the target-role list comes from the shared ROLES constants.
  */
 export default function AdminAnnouncements() {
   const [list, setList] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({
-    title: '', body: '', category: 'general', targetRoles: [ROLES.STUDENT, ROLES.TEACHER],
+    title: '', body: '', category: '', targetRoles: [ROLES.STUDENT, ROLES.TEACHER],
   });
   const [saving, setSaving] = useState(false);
 
-  const load = () => api.get('/admin/announcements').then((r) => setList(r.data.data));
+  const load = () =>
+    Promise.all([api.get('/admin/announcements'), loadOptions()]).then(([r, o]) => {
+      setList(r.data.data);
+      setCategories(o.enums.announcementCategories);
+      setForm((f) => ({ ...f, category: f.category || o.enums.announcementCategories[0] || '' }));
+    });
 
   useEffect(() => {
     load().finally(() => setLoading(false));
@@ -86,7 +94,7 @@ export default function AdminAnnouncements() {
               <div className="form-group">
                 <label className="form-label">Category</label>
                 <select className="form-input" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                  {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  {categories.map((c) => <option key={c} value={c}>{optionLabel(c)}</option>)}
                 </select>
               </div>
             </div>

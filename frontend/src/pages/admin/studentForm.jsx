@@ -1,10 +1,23 @@
 /**
  * Shared student form fields used by the admin student modal.
+ *
+ * Class and section are suggested from the classes that exist in the database
+ * (GET /school/options) via a `datalist`, so the options are live data rather
+ * than a fixed range — and because a school can open a new class at any time the
+ * fields stay free-entry: the API creates the class row on save.
+ *
  * @param {object} form   - current form values
  * @param {function} setForm - state setter
+ * @param {object} options - reference options ({ classes: [...] })
  */
-export default function studentForm(form, setForm) {
+export default function studentForm(form, setForm, options = {}) {
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+
+  /* Distinct grades/sections actually in use — derived, never a fixed list */
+  const classes = options.classes || [];
+  const grades = [...new Set(classes.map((c) => c.grade))];
+  const sections = [...new Set(classes.map((c) => c.section))];
+
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-md)' }}>
       <div className="form-group">
@@ -13,15 +26,31 @@ export default function studentForm(form, setForm) {
       </div>
       <div className="form-group">
         <label className="form-label">Class *</label>
-        <select className="form-input" value={form.class} onChange={set('class')}>
-          {['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'].map((v) => <option key={v} value={v}>{v}</option>)}
-        </select>
+        <input
+          className="form-input"
+          list="student-class-options"
+          value={form.class}
+          onChange={set('class')}
+          placeholder="e.g. 10"
+          aria-label="Class"
+        />
+        <datalist id="student-class-options">
+          {grades.map((g) => <option key={g} value={g} />)}
+        </datalist>
       </div>
       <div className="form-group">
         <label className="form-label">Section *</label>
-        <select className="form-input" value={form.section} onChange={set('section')}>
-          {['A', 'B', 'C', 'D'].map((v) => <option key={v} value={v}>{v}</option>)}
-        </select>
+        <input
+          className="form-input"
+          list="student-section-options"
+          value={form.section}
+          onChange={set('section')}
+          placeholder="e.g. A"
+          aria-label="Section"
+        />
+        <datalist id="student-section-options">
+          {sections.map((s) => <option key={s} value={s} />)}
+        </datalist>
       </div>
       <div className="form-group">
         <label className="form-label">Roll Number</label>

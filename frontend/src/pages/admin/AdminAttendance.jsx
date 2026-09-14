@@ -1,31 +1,35 @@
 import { useEffect, useState } from 'react';
 import { CalendarDays, Save } from 'lucide-react';
 import api from '../../services/api';
+import { loadOptions } from '../../services/options';
 import toast from 'react-hot-toast';
 import { todayISO } from '../../utils/date';
 
-const STATUSES = ['present', 'absent', 'late', 'half-day', 'holiday'];
-
 /**
  * Admin Attendance — mark attendance for students or employees per day.
+ * The status list is the AttendanceStatus enum served by /school/options and the
+ * people lists come from the API, so nothing is a fixed local list.
  */
 export default function AdminAttendance() {
   const [tab, setTab] = useState('student');
   const [students, setStudents] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [statuses, setStatuses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [entityId, setEntityId] = useState('');
   const [date, setDate] = useState(todayISO());
-  const [status, setStatus] = useState('present');
+  const [status, setStatus] = useState('');
   const [workingHours, setWorkingHours] = useState('8');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    Promise.all([api.get('/admin/students'), api.get('/admin/employees')])
-      .then(([s, e]) => {
+    Promise.all([api.get('/admin/students'), api.get('/admin/employees'), loadOptions()])
+      .then(([s, e, o]) => {
         setStudents(s.data.data);
         setEmployees(e.data.data);
         setEntityId(s.data.data[0]?.id || e.data.data[0]?.id || '');
+        setStatuses(o.enums.attendanceStatuses);
+        setStatus((current) => current || o.enums.attendanceStatuses[0] || '');
       })
       .finally(() => setLoading(false));
   }, []);
@@ -95,7 +99,7 @@ export default function AdminAttendance() {
             <div className="form-group">
               <label className="form-label">Status</label>
               <select className="form-input" value={status} onChange={(e) => setStatus(e.target.value)}>
-                {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
           </div>

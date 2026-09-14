@@ -2,46 +2,64 @@ import { useEffect, useState } from 'react';
 import { User, Plus, Pencil, Trash } from 'lucide-react';
 import Modal from '../../components/Modal';
 import api from '../../services/api';
+import { loadOptions } from '../../services/options';
+import { EMPLOYEE_ROLES } from '../../constants/roles';
 import toast from 'react-hot-toast';
 import employeeForm from './employeeForm';
 
-const EMPTY_FORM = {
-  name: '', employeeId: '', gender: 'Female', department: '', designation: '', role: 'teacher',
-  employmentType: 'Permanent', dateOfJoining: '', mobile: '', email: '', qualification: '',
-  experience: '', dob: '', bloodGroup: '', emergencyContact: '', status: 'active', address: '',
-};
+/**
+ * Blank employee form. Every default is the first option the server offers for
+ * that field (Prisma enums via /school/options, EMPLOYEE_ROLES for the job
+ * role), so no default is a literal written here.
+ * @param {object} enums option lists from GET /school/options
+ */
+const blankForm = (enums = {}) => ({
+  name: '', employeeId: '',
+  gender: enums.genders?.[0] || '',
+  department: '', designation: '',
+  role: EMPLOYEE_ROLES[0],
+  employmentType: enums.employmentTypes?.[0] || '',
+  dateOfJoining: '', mobile: '', email: '', qualification: '',
+  experience: '', dob: '', bloodGroup: '', emergencyContact: '',
+  status: enums.accountStatuses?.[0] || '',
+  address: '',
+});
 
 /**
  * Admin Employees — list, add, edit and delete employee records.
  */
 export default function AdminEmployees() {
   const [employees, setEmployees] = useState([]);
+  const [options, setOptions] = useState({ enums: {}, classes: [] });
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
-  const [form, setForm] = useState({ ...EMPTY_FORM });
+  const [form, setForm] = useState(blankForm());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const load = () => api.get('/admin/employees').then((r) => setEmployees(r.data.data));
+  const load = () =>
+    Promise.all([api.get('/admin/employees'), loadOptions()])
+      .then(([e, o]) => { setEmployees(e.data.data); setOptions(o); });
 
   useEffect(() => {
     load().finally(() => setLoading(false));
   }, []);
 
   const openCreate = () => {
-    setForm({ ...EMPTY_FORM });
+    setForm(blankForm(options.enums));
     setError('');
     setModal({ mode: 'create' });
   };
 
   const openEdit = (e) => {
+    const blank = blankForm(options.enums);
     setForm({
-      name: e.name, employeeId: e.employeeId || '', gender: e.gender || 'Female',
-      department: e.department || '', designation: e.designation || '', role: e.role || 'teacher',
-      employmentType: e.employmentType || 'Permanent', dateOfJoining: e.dateOfJoining || '',
+      name: e.name, employeeId: e.employeeId || '', gender: e.gender || blank.gender,
+      department: e.department || '', designation: e.designation || '', role: e.role || blank.role,
+      employmentType: e.employmentType || blank.employmentType, dateOfJoining: e.dateOfJoining || '',
       mobile: e.mobile || '', email: e.email || '', qualification: e.qualification || '',
       experience: e.experience || '', dob: e.dob || '', bloodGroup: e.bloodGroup || '',
-      emergencyContact: e.emergencyContact || '', status: e.status || 'active', address: e.address || '',
+      emergencyContact: e.emergencyContact || '', status: e.status || blank.status, address: e.address || '',
     });
     setError('');
     setModal({ mode: 'edit', employee: e });
@@ -157,7 +175,7 @@ export default function AdminEmployees() {
           }
         >
           {error && <div className="login-error" style={{ marginBottom: 'var(--sp-md)' }}>{error}</div>}
-          {employeeForm(form, setForm)}
+          {employeeForm(form, setForm, options)}
         </Modal>
       )}
     </div>

@@ -3,10 +3,17 @@ const { z } = require('zod');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
+const {
+  Gender,
+  EmploymentType,
+  AccountStatus,
+  AttendanceStatus,
+} = require('@prisma/client');
 const { parse: parseCsv } = require('csv-parse/sync');
 const authMiddleware = require('../../middleware/auth.middleware');
 const { requireRole } = require('../../middleware/role.middleware');
 const { ROLES, EMPLOYEE_ROLES } = require('../../constants/roles');
+const { ANNOUNCEMENT_CATEGORIES, ACHIEVEMENT_TYPES } = require('../../constants/options');
 const { sendSuccess, sendError, sendValidationError } = require('../../utils/response');
 const prisma = require('../../services/prisma');
 const { isTransientDbError } = require('../../services/prisma');
@@ -18,6 +25,7 @@ const {
   mapPeriod,
   mapAchievement,
   statusToDb,
+  statusToApi,
   classIdOf,
   toDateStr,
   toIso,
@@ -75,11 +83,17 @@ const MARKS_BULK_MAX_ROWS = 200;
 /** Multer keeps the upload in memory — no temp files to clean up. 5 MB cap. */
 const marksBulkUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
-/** Example rows shipped in the downloadable template (clearly samples — replace before uploading) */
-const MARKS_BULK_EXAMPLES = [
-  ['STU-2026-901', 'Sample Student One', '10', 'A', 'Unit Test 2', '14-09-2026', 'Mathematics', 100, 88],
-  ['STU-2026-901', 'Sample Student One', '10', 'A', 'Unit Test 2', '14-09-2026', 'Science', 100, 91],
-  ['STU-2026-902', 'Sample Student Two', '10', 'A', 'Unit Test 2', '14-09-2026', 'Mathematics', 100, 79],
+/**
+ * Format placeholder row shipped in the downloadable template.
+ *
+ * Deliberately contains no student data (no names, roll numbers, classes,
+ * subjects or marks): the angle-bracket tokens cannot match a student, so
+ * uploading the untouched template is rejected row-by-row instead of silently
+ * writing invented results.
+ */
+const MARKS_BULK_PLACEHOLDER_ROW = [
+  '<RollNumber>', '<StudentName>', '<Class>', '<Section>', '<ExamName>',
+  '<ExamDate>', '<Subject>', '<MaxMarks>', '<ObtainedMarks>',
 ];
 
 /** Build a UTC-midnight Date, rejecting impossible calendar dates (e.g. 31-02-2026) */
@@ -536,7 +550,7 @@ const EMPLOYEE_INCLUDE = {
 const employeeSchema = z.object({
   name: z.string().min(2).max(100),
   employeeId: z.string().min(1).max(50).optional(),
-  gender: z.enum(['Male', 'Female', 'Other']).optional(),
+  gender: z.enum(Object.values(Gender)).optional(),
   dob: dateStr.optional(),
   bloodGroup: z.string().max(5).optional(),
   mobile: z.string().min(5).max(25).optional(),
@@ -550,8 +564,8 @@ const employeeSchema = z.object({
   dateOfJoining: dateStr.optional(),
   experience: z.string().max(50).optional(),
   reportingPrincipal: z.string().max(100).optional(),
-  employmentType: z.enum(['Permanent', 'Contract', 'Probation', 'Temporary']).optional(),
-  status: z.enum(['active', 'inactive']).optional(),
+  employmentType: z.enum(Object.values(EmploymentType)).optional(),
+  status: z.enum(Object.values(AccountStatus)).optional(),
 });
 
 /** Employee payload → Prisma data (dates as @db.Date, enums verbatim) */
@@ -677,7 +691,7 @@ const announcementSchema = z.object({
   title: z.string().min(3).max(200),
   body: z.string().min(10),
   targetRoles: z.array(z.enum(Object.values(ROLES))).min(1),
-  category: z.enum(['event', 'exam', 'holiday', 'meeting', 'general']),
+  category: z.enum(ANNOUNCEMENT_CATEGORIES),
 });
 
 /** GET /api/v1/admin/announcements — list all (admin sees everything), newest first */
@@ -768,7 +782,7 @@ const attendanceSchema = z.object({
   entityType: z.enum(['student', 'employee']),
   entityId: z.string().min(1),
   date: dateStr,
-  status: z.enum(['present', 'absent', 'late', 'half-day', 'holiday']),
+  status: z.enum(Object.values(AttendanceStatus).map(statusToApi)),
   workingHours: z.number().min(0).max(24).optional(),
 });
 
@@ -1160,10 +1174,8 @@ router.get('/marks/bulk-template', async (req, res) => {
   sheet.addRow(MARKS_BULK_COLUMNS);
   sheet.getRow(1).font = { bold: true };
   sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFE7D6' } };
-  MARKS_BULK_EXAMPLES.forEach((values) => {
-    const row = sheet.addRow(values);
-    row.font = { italic: true, color: { argb: 'FF808080' } };
-  });
+  const placeholder = sheet.addRow(MARKS_BULK_PLACEHOLDER_ROW);
+  placeholder.font = { italic: true, color: { argb: 'FF808080' } };
   sheet.columns.forEach((c) => { c.width = 16; });
 
   const notes = book.addWorksheet('Instructions');
@@ -1171,7 +1183,7 @@ router.get('/marks/bulk-template', async (req, res) => {
   notes.getRow(1).font = { bold: true, size: 13 };
   [
     '',
-    `1. Go to the 'Marks' tab. The ${MARKS_BULK_EXAMPLES.length} data rows already there are EXAMPLES — delete or overwrite them before uploading.`,
+    `1. Go to the 'Marks' tab. Row 2 is a FORMAT PLACEHOLDER — replace every <...> value with real data (keep the header row).`,
     '2. Use ONE ROW PER STUDENT PER SUBJECT (long/tidy format) — not one row per student with a column per subject.',
     '3. Students are matched by RollNumber, so it must match a student already in the system.',
     '4. Subject is free text. Any subject name is accepted — subjects are defined by the admin, not a fixed list.',
@@ -1305,7 +1317,7 @@ const achievementSchema = z.object({
   title: z.string().min(3).max(200),
   description: z.string().min(10).max(500),
   date: dateStr,
-  type: z.enum(['academic', 'sports', 'cultural', 'other']),
+  type: z.enum(ACHIEVEMENT_TYPES),
 });
 
 /** GET /api/v1/admin/achievements — flattened list with student names, newest first */

@@ -1,5 +1,6 @@
 const express = require('express');
 const { z } = require('zod');
+const { LeaveType } = require('@prisma/client');
 const authMiddleware = require('../../middleware/auth.middleware');
 const { requireRole } = require('../../middleware/role.middleware');
 const { ROLES, EMPLOYEE_ROLES } = require('../../constants/roles');
@@ -86,7 +87,7 @@ router.get('/:id/leaves', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), async (
 
 /** Apply leave schema */
 const applyLeaveSchema = z.object({
-  type: z.enum(['casual', 'sick', 'earned']),
+  type: z.enum(Object.values(LeaveType)),
   fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD'),
   toDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD'),
   reason: z.string().min(5, 'Reason must be at least 5 characters').max(500),
