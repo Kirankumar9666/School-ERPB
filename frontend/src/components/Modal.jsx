@@ -1,13 +1,19 @@
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
 
 /**
- * Reusable modal dialog. Click outside (overlay), ✕ or Esc to close.
- * Keyboard support: the panel receives focus when opened, Tab is trapped
- * inside while it is open, and focus returns to the trigger element on
- * close. Body scroll is locked for the lifetime of the dialog.
+ * Reusable modal dialog. Renders through a React portal to <body> so the
+ * overlay is a direct child of the document — page-level transforms (e.g. the
+ * fade-in page entrance), stacking contexts and scroll containers can never
+ * offset it. It is always centered in the viewport (fixed full-screen overlay)
+ * regardless of scroll position or which element triggered it.
+ * Click outside (overlay), ✕ or Esc to close. Keyboard support: the panel
+ * receives focus when opened, Tab is trapped inside while it is open, and
+ * focus returns to the trigger element on close. Body scroll is locked for
+ * the lifetime of the dialog.
  * @param {string} title     - modal heading (also the accessible name)
  * @param {node} children    - body content
  * @param {node} [footer]    - optional footer actions
@@ -71,7 +77,7 @@ export default function Modal({ title, children, footer, onClose, wide = false, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return (
+  return createPortal(
     <div
       className="modal-overlay"
       onClick={(e) => {
@@ -94,6 +100,7 @@ export default function Modal({ title, children, footer, onClose, wide = false, 
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-footer">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
