@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const compression = require('compression');
 const config = require('./config/env');
 const { apiLimiter } = require('./middleware/rateLimiter.middleware');
 
@@ -15,6 +16,16 @@ const adminRoutes = require('./modules/admin/admin.routes');
 const { sendError } = require('./utils/response');
 
 const app = express();
+
+// A rejected promise from an async route (Express 4 has no async error
+// propagation) must not take the whole process down — under load, one
+// transient DB blip would otherwise crash every in-flight request. The
+// global error handler below still owns the HTTP response for sync throws;
+// this guard only keeps the process alive and logs.
+process.on('unhandledRejection', (err) => {
+  console.error('[UNHANDLED-REJECTION]', err?.message || err);
+  if (config.logLevel === 'debug' && err?.stack) console.error(err.stack);
+});
 
 // Behind one reverse proxy (nginx/traefik) — makes req.ip and express-rate-limit
 // see the real client IP instead of the proxy's.
@@ -37,8 +48,17 @@ app.use(cors({
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-if (config.nodeEnv !== 'test') {
-  app.use(morgan('dev'));
+// Response compression — JSON list payloads (students/by-class, marks, ...)
+// shrink ~80% over the wire. Runs before routes; nginx gzip on the frontend
+// container only covers static assets, not the proxied API responses.
+app.use(compression());
+
+// Request logging is gated by LOG_LEVEL (config/env.js):
+//   - production default 'warn'  → NO per-request access logs at all
+//   - development default 'debug'→ morgan 'dev' colored output
+//   - production with LOG_LEVEL=debug → morgan 'combined' (temporarily only)
+if (config.logLevel === 'debug' && config.nodeEnv !== 'test') {
+  app.use(morgan(config.isProd ? 'combined' : 'dev'));
 }
 
 // ─── Health Check ─────────────────────────────────────────────────────────
@@ -64,7 +84,13 @@ app.use((req, res) => {
 // ─── Global Error Handler ─────────────────────────────────────────────────
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  console.error('[ERROR]', err.message);
+  // Message only by default (no stack, no request data). LOG_LEVEL=debug
+  // opts into the stack trace for diagnosis — temporary use only.
+  if (config.logLevel === 'debug') {
+    console.error('[ERROR]', err.stack || err.message);
+  } else {
+    console.error('[ERROR]', err.message);
+  }
   sendError(res, 'Internal server error', 500, 'SERVER_ERROR');
 });
 

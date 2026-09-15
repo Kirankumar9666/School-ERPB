@@ -8,6 +8,16 @@ const nodeEnv = process.env.NODE_ENV || 'development';
 const isProd = nodeEnv === 'production';
 
 /**
+ * Log verbosity gate: 'debug' | 'info' | 'warn' | 'error'.
+ * Production defaults to 'warn' (errors + essential warnings only — no
+ * request logs). 'debug' turns on per-request access logs (morgan combined)
+ * and error stack traces; never ship production with 'debug' enabled.
+ */
+const LOG_LEVELS = ['debug', 'info', 'warn', 'error'];
+const rawLevel = (process.env.LOG_LEVEL || '').toLowerCase();
+const logLevel = LOG_LEVELS.includes(rawLevel) ? rawLevel : (isProd ? 'warn' : 'debug');
+
+/**
  * JWT secrets must be provided explicitly. In production a missing secret is a
  * fatal startup error (fail fast) — in development we fall back to a clearly
  * labelled insecure value so the app still runs out of the box.
@@ -25,6 +35,8 @@ function resolveJwtSecret(envVar, devFallback) {
 const config = {
   port: process.env.PORT || 5000,
   nodeEnv,
+  isProd,
+  logLevel,
 
   jwt: {
     secret: resolveJwtSecret('JWT_SECRET', 'dev-only-insecure-jwt-secret-change-me'),
@@ -59,6 +71,11 @@ const config = {
   rateLimit: {
     loginMaxAttempts: 5,
     loginWindowMs: 15 * 60 * 1000, // 15 minutes
+    // Global /api/v1 ceiling per client IP. 300/15min suits scattered home
+    // users, but a whole school behind one NAT IP (or a load test) trips it
+    // instantly — raise via API_RATE_LIMIT_MAX when many users share an IP.
+    apiMax: parseInt(process.env.API_RATE_LIMIT_MAX || '300', 10),
+    apiWindowMs: 15 * 60 * 1000,
   },
 };
 

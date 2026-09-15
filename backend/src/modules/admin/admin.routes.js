@@ -1,6 +1,6 @@
 const express = require('express');
 const { z } = require('zod');
-const bcrypt = require('bcryptjs');
+const bcrypt = require('bcrypt');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
 const {
@@ -17,6 +17,7 @@ const { ANNOUNCEMENT_CATEGORIES, ACHIEVEMENT_TYPES } = require('../../constants/
 const { sendSuccess, sendError, sendValidationError } = require('../../utils/response');
 const prisma = require('../../services/prisma');
 const { isTransientDbError } = require('../../services/prisma');
+const cache = require('../../utils/cache');
 const {
   mapStudent,
   mapEmployee,
@@ -45,6 +46,11 @@ router.use((req, res, next) => {
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
   res.on('finish', () => {
     if (res.statusCode < 400) {
+      // Any successful admin mutation may have changed class lists, student
+      // headcounts or the summary counters — drop those caches so the next
+      // read is fresh (staleness is otherwise bounded by their TTLs).
+      cache.del('options:');
+      cache.del('summary');
       prisma.auditEntry.create({
         data: {
           actorUserId: req.user?.id || null,
@@ -182,60 +188,52 @@ router.get('/students', async (req, res) => {
 /* ---------- Class summaries (derived aggregation over students + marks) ---------- */
 
 /**
- * Normalize one student's class key and human label.
- * "10"/"A" → { key: "10-A", label: "10 - Class A" }.
- * Trims whitespace; missing section defaults to no suffix.
- */
-const classKeyLabel = (student) => {
-  const cls = String(student.class ?? '').trim();
-  const section = String(student.section ?? '').trim().toUpperCase();
-  const key = section ? `${cls}-${section}` : cls;
-  const label = section ? `${cls} - Class ${section}` : cls;
-  return { key, label };
-};
-
-/**
- * Overall percent (0–100) for one student across all their marks entries,
- * or null when the student has no marks yet (excluded from top/avg).
- */
-const studentOverallPercent = (marksByStudent, studentId) => {
-  const rows = marksByStudent.get(studentId) || [];
-  let obtained = 0;
-  let max = 0;
-  rows.forEach((row) => {
-    obtained += Number(row.obtained) || 0;
-    max += Number(row.maxMarks) || 0;
-  });
-  if (max <= 0) return null;
-  return (obtained / max) * 100;
-};
-
-/**
  * GET /api/v1/admin/students/by-class — students grouped per class with aggregates.
  * Derived live from the students + marks_entries tables, so rows update
- * automatically on any add/edit/delete. Query ?q= filters the underlying
+ * automatically on any add/edit/delete (never cached — the bulk-marks flow
+ * re-reads this endpoint right after saving). Query ?q= filters the underlying
  * students by name/roll/class/section before grouping.
+ *
+ * Perf: two lean queries instead of full-table row loads —
+ *   - students: only the columns the response/`?q=` filter actually use
+ *   - marks: per-student totals computed by the database (groupBy/_sum),
+ *     so one aggregate row per student is shipped instead of every entry
  */
 router.get('/students/by-class', async (req, res) => {
   const q = String(req.query.q || '').trim().toLowerCase();
 
-  const [students, markRows] = await Promise.all([
-    prisma.student.findMany({ include: { class: true }, orderBy: { id: 'asc' } }),
-    prisma.marksEntry.findMany({ select: { studentId: true, obtained: true, maxMarks: true } }),
+  const [students, markSums] = await Promise.all([
+    prisma.student.findMany({
+      select: {
+        id: true,
+        name: true,
+        rollNumber: true,
+        feeDues: true,
+        class: { select: { grade: true, section: true } },
+      },
+      orderBy: { id: 'asc' },
+    }),
+    prisma.marksEntry.groupBy({
+      by: ['studentId'],
+      _sum: { obtained: true, maxMarks: true },
+    }),
   ]);
 
-  const marksByStudent = new Map();
-  markRows.forEach((m) => {
-    if (!marksByStudent.has(m.studentId)) marksByStudent.set(m.studentId, []);
-    marksByStudent.get(m.studentId).push(m);
+  // studentId → overall percent 0–100, or null when unmarked / max<=0
+  // (identical semantics to summing every entry row per student).
+  const percentOf = new Map();
+  markSums.forEach((m) => {
+    const obtained = m._sum.obtained ?? 0;
+    const max = m._sum.maxMarks ?? 0;
+    percentOf.set(m.studentId, max > 0 ? (obtained / max) * 100 : null);
   });
 
-  // Same JS-side filter the mock version applied (small dataset, keeps ?q=
-  // semantics identical: name/roll/class/section substring match)
-  const matches = (s, mapped) => [mapped.name, mapped.rollNumber, mapped.class, mapped.section]
-    .some((v) => String(v ?? '').toLowerCase().includes(q));
-
-  const pool = q ? students.filter((s) => matches(s, mapStudent(s))) : students;
+  // Same JS-side filter the mock version applied (keeps ?q= semantics
+  // identical: name/roll/class/section substring match)
+  const pool = q
+    ? students.filter((s) => [s.name, s.rollNumber, String(s.class.grade), s.class.section]
+      .some((v) => String(v ?? '').toLowerCase().includes(q)))
+    : students;
 
   const groups = new Map();
   pool.forEach((s) => {
@@ -243,39 +241,34 @@ router.get('/students/by-class', async (req, res) => {
     if (!groups.has(key)) {
       groups.set(key, {
         key,
-        label: `${s.class.grade} - Class ${s.class.section}`,
         grade: s.class.grade,
         section: s.class.section,
         studentIds: [],
-        members: [],
+        totalStudents: 0,
+        feeDues: 0,
+        percents: [],
       });
     }
     const g = groups.get(key);
     g.studentIds.push(s.id);
-    g.members.push(s);
+    g.totalStudents += 1;
+    g.feeDues += Number(s.feeDues) || 0;
+    const percent = percentOf.get(s.id);
+    if (percent !== undefined && percent !== null) g.percents.push(percent);
   });
 
-  const rows = [...groups.values()].map((g) => {
-    const totalStudents = g.members.length;
-    const feeDues = g.members.reduce((sum, s) => sum + (Number(s.feeDues) || 0), 0);
-    const percents = g.members
-      .map((m) => studentOverallPercent(marksByStudent, m.id))
-      .filter((p) => p !== null);
-    const topScore = percents.length ? Math.round(Math.max(...percents)) : null;
-    const avgMarks = percents.length
-      ? Math.round(percents.reduce((a, b) => a + b, 0) / percents.length)
-      : null;
-    return {
-      key: g.key,
-      class: g.label,
-      totalStudents,
-      feeDues,
-      topScore,
-      avgMarks,
-      markedCount: percents.length,
-      studentIds: g.studentIds,
-    };
-  });
+  const rows = [...groups.values()].map((g) => ({
+    key: g.key,
+    class: `${g.grade} - Class ${g.section}`,
+    totalStudents: g.totalStudents,
+    feeDues: g.feeDues,
+    topScore: g.percents.length ? Math.round(Math.max(...g.percents)) : null,
+    avgMarks: g.percents.length
+      ? Math.round(g.percents.reduce((a, b) => a + b, 0) / g.percents.length)
+      : null,
+    markedCount: g.percents.length,
+    studentIds: g.studentIds,
+  }));
 
   // Numeric classes first (9 before 10), then section A→B→C
   rows.sort((a, b) => {
@@ -964,23 +957,62 @@ router.post('/attendance/bulk', async (req, res) => {
   const markedBy = req.user?.username || null;
 
   await prisma.$transaction(async (tx) => {
-    for (const e of entries) {
+    // Perf: one existence read + batched writes (createMany / grouped
+    // updateMany) instead of two sequential round trips per row. A 40-student
+    // class drops from ~80 queries to ~3; a 200-row group from ~400 to ~7.
+    // Semantics are identical to the previous per-row upserts: missing rows
+    // are created, existing rows get their status (and employee hours) set.
+    const ids = entries.map((e) => e.entityId);
+    const existingRows = kind === 'student'
+      ? await tx.studentAttendance.findMany({ where: { studentId: { in: ids }, date: day }, select: { studentId: true } })
+      : await tx.employeeAttendance.findMany({ where: { employeeId: { in: ids }, date: day }, select: { employeeId: true } });
+    const existingIds = new Set(existingRows.map((r) => (kind === 'student' ? r.studentId : r.employeeId)));
+
+    const creates = [];
+    // Updates grouped by identical payload → one updateMany per distinct status
+    const updateGroups = new Map(); // key → { statusDb, workingHours, ids[] }
+    const seen = new Set(); // in-request duplicates: later entries act as updates
+    entries.forEach((e) => {
       const statusDb = statusToDb(e.status);
-      if (kind === 'student') {
-        await tx.studentAttendance.upsert({
-          where: { studentId_date: { studentId: e.entityId, date: day } },
-          update: { status: statusDb },
-          create: { studentId: e.entityId, date: day, status: statusDb },
-        });
+      const isExisting = existingIds.has(e.entityId) || seen.has(e.entityId);
+      seen.add(e.entityId);
+      if (isExisting) {
+        const workingHours = kind === 'employee' ? (e.status === 'absent' ? 0 : 8) : null;
+        const key = `${statusDb}|${workingHours}`;
+        if (!updateGroups.has(key)) updateGroups.set(key, { statusDb, workingHours, ids: [] });
+        updateGroups.get(key).ids.push(e.entityId);
+      } else if (kind === 'student') {
+        creates.push({ studentId: e.entityId, date: day, status: statusDb });
       } else {
-        const workingHours = e.status === 'absent' ? 0 : 8;
-        await tx.employeeAttendance.upsert({
-          where: { employeeId_date: { employeeId: e.entityId, date: day } },
-          update: { status: statusDb, workingHours },
-          create: { employeeId: e.entityId, date: day, status: statusDb, workingHours },
+        creates.push({
+          employeeId: e.entityId,
+          date: day,
+          status: statusDb,
+          workingHours: e.status === 'absent' ? 0 : 8,
         });
       }
+    });
+
+    // Creates first, then updates — an in-request duplicate of a created row
+    // is picked up by its updateMany (same transaction, same connection).
+    if (creates.length) {
+      if (kind === 'student') {
+        await tx.studentAttendance.createMany({ data: creates });
+      } else {
+        await tx.employeeAttendance.createMany({ data: creates });
+      }
     }
+    for (const group of updateGroups.values()) {
+      const data = kind === 'employee'
+        ? { status: group.statusDb, workingHours: group.workingHours }
+        : { status: group.statusDb };
+      if (kind === 'student') {
+        await tx.studentAttendance.updateMany({ where: { studentId: { in: group.ids }, date: day }, data });
+      } else {
+        await tx.employeeAttendance.updateMany({ where: { employeeId: { in: group.ids }, date: day }, data });
+      }
+    }
+
     await tx.attendanceConfirmation.upsert({
       where: { kind_groupKey_date: { kind, groupKey, date: day } },
       update: { confirmedAt, markedBy },
@@ -1308,12 +1340,46 @@ router.post('/marks/bulk', marksBulkUpload.single('file'), async (req, res) => {
       });
       examIdOf.set(key, exam.id);
     }
-    for (const e of entries) {
+    // Perf: one existence read, then creates via createMany and updates
+    // grouped by identical (exam, subject, maxMarks, obtained) payload →
+    // one updateMany per distinct payload. A 200-row first upload becomes
+    // ~2 queries instead of 200 sequential round trips; correction re-uploads
+    // collapse to a handful. Semantics match the previous per-row upserts.
+    const examIds = [...new Set(entries.map((e) => examIdOf.get(`${e.classId}::${e.examName.toLowerCase()}`)))];
+    const existingRows = await tx.marksEntry.findMany({
+      where: { examId: { in: examIds } },
+      select: { studentId: true, examId: true, subject: true },
+    });
+    const existingKeys = new Set(existingRows.map((r) => `${r.studentId}::${r.examId}::${r.subject}`));
+
+    const creates = [];
+    const updateGroups = new Map(); // payload key → { examId, subject, maxMarks, obtained, studentIds[] }
+    const seen = new Set();
+    entries.forEach((e) => {
       const examId = examIdOf.get(`${e.classId}::${e.examName.toLowerCase()}`);
-      await tx.marksEntry.upsert({
-        where: { studentId_examId_subject: { studentId: e.studentId, examId, subject: e.subject } },
-        update: { maxMarks: e.maxMarks, obtained: e.obtained },
-        create: { studentId: e.studentId, examId, subject: e.subject, maxMarks: e.maxMarks, obtained: e.obtained },
+      const rowKey = `${e.studentId}::${examId}::${e.subject}`;
+      const isExisting = existingKeys.has(rowKey) || seen.has(rowKey);
+      seen.add(rowKey);
+      if (isExisting) {
+        const payloadKey = `${examId}::${e.subject}::${e.maxMarks}::${e.obtained}`;
+        if (!updateGroups.has(payloadKey)) {
+          updateGroups.set(payloadKey, { examId, subject: e.subject, maxMarks: e.maxMarks, obtained: e.obtained, studentIds: [] });
+        }
+        updateGroups.get(payloadKey).studentIds.push(e.studentId);
+      } else {
+        creates.push({ studentId: e.studentId, examId, subject: e.subject, maxMarks: e.maxMarks, obtained: e.obtained });
+      }
+    });
+
+    // Creates first, then updates — a duplicate rowKey (defensive: the parser
+    // already rejects in-file duplicates) lands as create + update on top.
+    if (creates.length) {
+      await tx.marksEntry.createMany({ data: creates });
+    }
+    for (const group of updateGroups.values()) {
+      await tx.marksEntry.updateMany({
+        where: { examId: group.examId, subject: group.subject, studentId: { in: group.studentIds } },
+        data: { maxMarks: group.maxMarks, obtained: group.obtained },
       });
     }
   }, { timeout: 180000, maxWait: 20000 });
@@ -1644,6 +1710,11 @@ router.get('/audit-log', async (req, res) => {
 
 /** GET /api/v1/admin/reports/summary — key stats for the admin dashboard */
 router.get('/reports/summary', async (req, res) => {
+  // 30s cache: six counts/aggregates per hit, changes only via mutations
+  // (which clear the 'summary' namespace in the admin mutation hook).
+  const cached = cache.get('summary:reports');
+  if (cached) return sendSuccess(res, cached);
+
   const [totalStudents, totalEmployees, feeAgg, totalAnnouncements, totalHolidays, pendingLeaves] = await Promise.all([
     prisma.student.count(),
     prisma.employee.count(),
@@ -1653,14 +1724,16 @@ router.get('/reports/summary', async (req, res) => {
     prisma.leaveRequest.count({ where: { status: 'pending' } }),
   ]);
 
-  return sendSuccess(res, {
+  const summary = {
     totalStudents,
     totalEmployees,
     totalFeeDues: feeAgg._sum.feeDues || 0,
     totalAnnouncements,
     totalHolidays,
     pendingLeaves,
-  });
+  };
+  cache.set('summary:reports', summary);
+  return sendSuccess(res, summary);
 });
 
 module.exports = router;

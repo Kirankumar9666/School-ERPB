@@ -4,6 +4,7 @@ const { requireRole } = require('../../middleware/role.middleware');
 const { ROLES, EMPLOYEE_ROLES } = require('../../constants/roles');
 const { sendSuccess } = require('../../utils/response');
 const prisma = require('../../services/prisma');
+const cache = require('../../utils/cache');
 const { toDateStr, monthRange } = require('../../services/mappers');
 const { enumOptions, classOptions } = require('../../services/options');
 
@@ -60,6 +61,11 @@ router.get('/options', async (req, res) => {
  * GET /api/v1/school/summary (Admin dashboard stats)
  */
 router.get('/summary', requireRole([ROLES.ADMIN]), async (req, res) => {
+  // 30s cache: five counts/aggregates per hit; cleared by any admin mutation
+  // (same underlying counters as GET /admin/reports/summary).
+  const cached = cache.get('summary:school');
+  if (cached) return sendSuccess(res, cached);
+
   const [totalStudents, totalEmployees, feeAgg, totalAnnouncements, totalHolidays] = await Promise.all([
     prisma.student.count(),
     prisma.employee.count(),
@@ -68,13 +74,15 @@ router.get('/summary', requireRole([ROLES.ADMIN]), async (req, res) => {
     prisma.holiday.count(),
   ]);
 
-  return sendSuccess(res, {
+  const summary = {
     totalStudents,
     totalEmployees,
     totalFeeDues: feeAgg._sum.feeDues || 0,
     totalAnnouncements,
     totalHolidays,
-  });
+  };
+  cache.set('summary:school', summary);
+  return sendSuccess(res, summary);
 });
 
 module.exports = router;

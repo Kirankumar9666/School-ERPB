@@ -23,8 +23,8 @@ const loginRateLimiter = rateLimit({
  * Generous ceiling — protects against abuse/DoS without disturbing normal use.
  */
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 300,
+  windowMs: config.rateLimit.apiWindowMs,
+  max: config.rateLimit.apiMax,
   standardHeaders: true,
   legacyHeaders: false,
   message: {

@@ -11,11 +11,16 @@ FROM node:22-alpine
 ENV NODE_ENV=production
 WORKDIR /app
 
+# Build tooling for native modules (bcrypt has no musl prebuilds — it must
+# compile from source on alpine). Removed again after npm ci to keep the
+# runtime image lean.
 # Install ALL dependencies first — the Prisma CLI (dev dep) is needed to
 # generate the query client. Pruned to production-only afterwards.
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
-RUN npm ci && npx prisma generate
+RUN apk add --no-cache python3 make g++ \
+  && npm ci && npx prisma generate \
+  && apk del python3 make g++
 
 # Ship the application source (dotenv finds no .env in the image — all
 # configuration is expected as container environment variables)

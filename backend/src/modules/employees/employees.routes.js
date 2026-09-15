@@ -6,6 +6,7 @@ const { requireRole } = require('../../middleware/role.middleware');
 const { ROLES, EMPLOYEE_ROLES } = require('../../constants/roles');
 const { sendSuccess, sendError, sendValidationError } = require('../../utils/response');
 const prisma = require('../../services/prisma');
+const cache = require('../../utils/cache');
 const {
   mapEmployee,
   mapLeave,
@@ -113,6 +114,10 @@ router.post('/:id/leaves/apply', requireRole([...EMPLOYEE_ROLES]), async (req, r
       reason,
     },
   });
+  // A new pending leave changes the summary counters — drop that cache
+  // (leaves are applied outside the admin router, so the admin mutation
+  // hook doesn't cover this route).
+  cache.del('summary');
 
   return sendSuccess(res, mapLeave(created), 'Leave application submitted', 201);
 });

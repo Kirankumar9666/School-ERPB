@@ -15,8 +15,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // pooled (transaction pooler) — used by the app
+  directUrl = env("DIRECT_URL")  // session pooler / direct — used by prisma migrate
 }
 
 // ─── Shared enums (values match the API strings verbatim) ──────────────────
@@ -113,6 +114,7 @@ model TeachingAssignment {
   isClassTeacher Boolean  @default(false)
 
   @@unique([employeeId, classId])
+  @@index([classId])
 }
 
 // ─── People ─────────────────────────────────────────────────────────────────
@@ -298,6 +300,7 @@ model LeaveRequest {
   decidedAt  DateTime?
 
   @@index([status])
+  @@index([employeeId])
 }
 
 model PayrollRecord {
@@ -327,6 +330,8 @@ model EmployeeDocument {
   type       String
   fileName   String
   uploadedAt DateTime @default(now())
+
+  @@index([employeeId])
 }
 
 model Announcement {
@@ -352,6 +357,8 @@ model Achievement {
   description String
   date        DateTime @db.Date
   type        String // 'academic' | 'sports' | ...
+
+  @@index([studentId])
 }
 
 // ─── Audit trail ────────────────────────────────────────────────────────────

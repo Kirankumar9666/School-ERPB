@@ -18,6 +18,7 @@ const {
 const { ANNOUNCEMENT_CATEGORIES, ACHIEVEMENT_TYPES } = require('../constants/options');
 const prisma = require('./prisma');
 const { statusToApi } = require('./mappers');
+const cache = require('../utils/cache');
 
 /**
  * Enum-backed option lists, in the spelling the API accepts
@@ -38,20 +39,38 @@ const enumOptions = () => ({
 
 /**
  * The classes that actually exist, with a live headcount per class.
+ *
+ * Cached (60s TTL): this endpoint is fetched on nearly every admin/employee
+ * page mount, and the classes table changes only via admin mutations — which
+ * invalidate the cache (see `invalidateClassOptions` + the admin mutation
+ * hook). Callers therefore never see a class list older than the last
+ * mutation.
+ *
  * @returns {Promise<Array<{id: string, grade: string, section: string, label: string, studentCount: number}>>}
  */
+const CLASS_OPTIONS_TTL_MS = 60_000;
+
 const classOptions = async () => {
+  const cached = cache.get('options:classes');
+  if (cached) return cached;
+
   const rows = await prisma.class.findMany({
     include: { _count: { select: { students: true } } },
     orderBy: [{ grade: 'asc' }, { section: 'asc' }],
   });
-  return rows.map((c) => ({
+  const options = rows.map((c) => ({
     id: c.id,
     grade: String(c.grade),
     section: c.section,
     label: `Class ${c.grade}${c.section}`,
     studentCount: c._count.students,
   }));
+
+  cache.set('options:classes', options, CLASS_OPTIONS_TTL_MS);
+  return options;
 };
 
-module.exports = { enumOptions, classOptions };
+/** Drop the cached class list (called when classes or student counts change). */
+const invalidateClassOptions = () => cache.del('options:');
+
+module.exports = { enumOptions, classOptions, invalidateClassOptions };

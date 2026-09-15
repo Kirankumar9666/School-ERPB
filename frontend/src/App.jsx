@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { lazy, Suspense } from 'react'
 import { Toaster } from 'react-hot-toast'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { ROLES, EMPLOYEE_ROLES } from './constants/roles'
@@ -7,44 +8,47 @@ import ProtectedLayout from './components/ProtectedLayout'
 import './styles/components.css'
 import './index.css'
 
-import Login from './pages/Login'
+// Login + the shared layout stay in the initial bundle (first paint + shell);
+// every role page is code-split so a user only downloads the portal they use
+// (student / employee / admin) instead of all 27 screens up front.
+const Login = lazy(() => import('./pages/Login'))
 
 // Student pages
-import StudentHome from './pages/student/StudentHome'
-import StudentProfile from './pages/student/StudentProfile'
-import StudentAttendance from './pages/student/StudentAttendance'
-import StudentMarks from './pages/student/StudentMarks'
-import StudentTimetable from './pages/student/StudentTimetable'
-import StudentSyllabus from './pages/student/StudentSyllabus'
-import StudentCirculars from './pages/student/StudentCirculars'
-import StudentHolidays from './pages/student/StudentHolidays'
-import StudentAchievements from './pages/student/StudentAchievements'
+const StudentHome = lazy(() => import('./pages/student/StudentHome'))
+const StudentProfile = lazy(() => import('./pages/student/StudentProfile'))
+const StudentAttendance = lazy(() => import('./pages/student/StudentAttendance'))
+const StudentMarks = lazy(() => import('./pages/student/StudentMarks'))
+const StudentTimetable = lazy(() => import('./pages/student/StudentTimetable'))
+const StudentSyllabus = lazy(() => import('./pages/student/StudentSyllabus'))
+const StudentCirculars = lazy(() => import('./pages/student/StudentCirculars'))
+const StudentHolidays = lazy(() => import('./pages/student/StudentHolidays'))
+const StudentAchievements = lazy(() => import('./pages/student/StudentAchievements'))
 
 // Employee pages
-import EmployeeDashboard from './pages/employee/EmployeeDashboard'
-import EmployeeProfile from './pages/employee/EmployeeProfile'
-import EmployeeAttendance from './pages/employee/EmployeeAttendance'
-import EmployeeLeave from './pages/employee/EmployeeLeave'
-import EmployeePayroll from './pages/employee/EmployeePayroll'
-import EmployeeTimetable from './pages/employee/EmployeeTimetable'
-import EmployeeClasses from './pages/employee/EmployeeClasses'
-import EmployeeAnnouncements from './pages/employee/EmployeeAnnouncements'
-import EmployeeDocuments from './pages/employee/EmployeeDocuments'
+const EmployeeDashboard = lazy(() => import('./pages/employee/EmployeeDashboard'))
+const EmployeeProfile = lazy(() => import('./pages/employee/EmployeeProfile'))
+const EmployeeAttendance = lazy(() => import('./pages/employee/EmployeeAttendance'))
+const EmployeeLeave = lazy(() => import('./pages/employee/EmployeeLeave'))
+const EmployeePayroll = lazy(() => import('./pages/employee/EmployeePayroll'))
+const EmployeeTimetable = lazy(() => import('./pages/employee/EmployeeTimetable'))
+const EmployeeClasses = lazy(() => import('./pages/employee/EmployeeClasses'))
+const EmployeeAnnouncements = lazy(() => import('./pages/employee/EmployeeAnnouncements'))
+const EmployeeDocuments = lazy(() => import('./pages/employee/EmployeeDocuments'))
 
 // Admin pages
-import AdminDashboard from './pages/admin/AdminDashboard'
-import AdminStudents from './pages/admin/AdminStudents'
-import AdminEmployees from './pages/admin/AdminEmployees'
-import AdminAttendance from './pages/admin/AdminAttendance'
-import AdminMarks from './pages/admin/AdminMarks'
-import AdminTimetable from './pages/admin/AdminTimetable'
-import AdminAnnouncements from './pages/admin/AdminAnnouncements'
-import AdminHolidays from './pages/admin/AdminHolidays'
-import AdminLeaves from './pages/admin/AdminLeaves'
-import AdminSyllabus from './pages/admin/AdminSyllabus'
-import AdminAchievements from './pages/admin/AdminAchievements'
-import AdminDocuments from './pages/admin/AdminDocuments'
-import AdminUsers from './pages/admin/AdminUsers'
+const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'))
+const AdminStudents = lazy(() => import('./pages/admin/AdminStudents'))
+const AdminEmployees = lazy(() => import('./pages/admin/AdminEmployees'))
+const AdminAttendance = lazy(() => import('./pages/admin/AdminAttendance'))
+const AdminMarks = lazy(() => import('./pages/admin/AdminMarks'))
+const AdminTimetable = lazy(() => import('./pages/admin/AdminTimetable'))
+const AdminAnnouncements = lazy(() => import('./pages/admin/AdminAnnouncements'))
+const AdminHolidays = lazy(() => import('./pages/admin/AdminHolidays'))
+const AdminLeaves = lazy(() => import('./pages/admin/AdminLeaves'))
+const AdminSyllabus = lazy(() => import('./pages/admin/AdminSyllabus'))
+const AdminAchievements = lazy(() => import('./pages/admin/AdminAchievements'))
+const AdminDocuments = lazy(() => import('./pages/admin/AdminDocuments'))
+const AdminUsers = lazy(() => import('./pages/admin/AdminUsers'))
 
 /** Map role → home path (single source of truth) */
 const ROLE_HOME = {
@@ -56,16 +60,19 @@ const ROLE_HOME = {
   [ROLES.LIBRARIAN]: '/employee',
 }
 
+/** Full-viewport spinner — shared by the auth gate and Suspense page loads */
+function PageLoader() {
+  return (
+    <div className="loading-center" style={{ minHeight: '100vh' }}>
+      <div className="spinner" />
+    </div>
+  )
+}
+
 /** RootRedirect — sends users to their role home or to /login */
 function RootRedirect() {
   const { user, isAuthenticated, loading } = useAuth()
-  if (loading) {
-    return (
-      <div className="loading-center" style={{ minHeight: '100vh' }}>
-        <div className="spinner" />
-      </div>
-    )
-  }
+  if (loading) return <PageLoader />
   if (!isAuthenticated) return <Navigate to="/login" replace />
   return <Navigate to={ROLE_HOME[user.role] || '/login'} replace />
 }
@@ -75,7 +82,10 @@ export default function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
-        <Routes>
+        {/* Every lazy page chunk resolves behind this spinner (same UI the
+            auth gate shows) — no layout change, no flash of empty content. */}
+        <Suspense fallback={<PageLoader />}>
+          <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/" element={<RootRedirect />} />
 
@@ -123,7 +133,8 @@ export default function App() {
           </Route>
 
           <Route path="*" element={<RootRedirect />} />
-        </Routes>
+          </Routes>
+        </Suspense>
         {/* Toasts are fired from many pages (upload success/failure, deletes,
             form validation). Without this single mount react-hot-toast renders
             nothing, so successful actions looked like the button did nothing. */}
