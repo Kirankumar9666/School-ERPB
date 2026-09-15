@@ -26,7 +26,10 @@ const blankForm = (enums = {}) => ({
 });
 
 /**
- * Admin Employees — list, add, edit and delete employee records.
+ * Admin Employees — list, add, edit and delete employee records, with a live
+ * search bar filtering the table by name, ID, department, designation, role,
+ * mobile, email or status (case-insensitive substring, no request per
+ * keystroke — the whole staff list is already loaded).
  */
 export default function AdminEmployees() {
   const [employees, setEmployees] = useState([]);
@@ -36,6 +39,21 @@ export default function AdminEmployees() {
   const [form, setForm] = useState(blankForm());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [q, setQ] = useState('');
+
+  /**
+   * Live search over the staff list. `GET /admin/employees` already returns
+   * every employee (no pagination), so the filter runs in the browser —
+   * instant, no request per keystroke. Same substring semantics the students
+   * screen applies server-side: case-insensitive match on any column shown
+   * (plus email, which the table itself omits).
+   */
+  const term = q.trim().toLowerCase();
+  const filtered = term
+    ? employees.filter((e) => [
+      e.name, e.employeeId, e.department, e.designation, e.role, e.mobile, e.email, e.status,
+    ].some((v) => String(v ?? '').toLowerCase().includes(term)))
+    : employees;
 
   const load = () =>
     Promise.all([api.get('/admin/employees'), loadOptions()])
@@ -112,10 +130,26 @@ export default function AdminEmployees() {
     <div className="page fade-in">
       <div className="page-header">
         <div className="page-title">Employee Management</div>
-        <div className="page-subtitle">{employees.length} employees on staff</div>
+        <div className="page-subtitle">
+          {term
+            ? `${filtered.length} of ${employees.length} employees match “${q.trim()}”`
+            : `${employees.length} employees on staff`}
+        </div>
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 'var(--sp-lg)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 'var(--sp-md)', flexWrap: 'wrap', marginBottom: 'var(--sp-lg)' }}>
+        <div className="form-group" style={{ flex: 1, minWidth: 240, maxWidth: 420, marginBottom: 0 }}>
+          <label className="form-label" htmlFor="employee-search">Search employees</label>
+          <input
+            id="employee-search"
+            className="form-input"
+            type="search"
+            placeholder="Search name, ID, department, designation…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            autoComplete="off"
+          />
+        </div>
         <button className="btn btn-primary" onClick={openCreate}>
           <Plus size={16} /> Add Employee
         </button>
@@ -126,6 +160,11 @@ export default function AdminEmployees() {
           <User size={40} />
           No employees yet. Add your first staff member.
         </div>
+      ) : filtered.length === 0 ? (
+        <div className="empty-state">
+          <User size={40} />
+          No employees match “{q.trim()}”.
+        </div>
       ) : (
         <div className="table-wrapper">
           <table>
@@ -135,7 +174,7 @@ export default function AdminEmployees() {
               </tr>
             </thead>
             <tbody>
-              {employees.map((e) => (
+              {filtered.map((e) => (
                 <tr key={e.id}>
                   <td><b>{e.name}</b></td>
                   <td>{e.employeeId}</td>
