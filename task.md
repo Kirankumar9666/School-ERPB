@@ -47,8 +47,8 @@
 - [x] Implement login rate limiting (max 5 failed attempts → 15 min lock)
 - [x] Admin-only password reset API (`POST /api/v1/auth/reset-password` + `PUT /api/v1/admin/users/:id/reset-password`)
 - [x] Build Login Screen (UI)
-  - [x] Username + Password fields
-  - [x] Password visibility toggle
+  - [x] Username + Password fields — leading icons no longer overlap the placeholder/typed text: the shared `components.css` icon rules were broken because `.has-icon .form-input` (descendant selector) never matched inputs that carry the class themselves, so the reserved 38px padding silently never applied; padding is now derived in `.input-wrapper` from `--icon-inset + --icon-size + --icon-gap` (12+16+10 = the intended 38px, same for the right-side eye toggle) and matches either markup form, so it holds if icon size or input padding ever change
+  - [x] Password visibility toggle — now actually clickable: `.input-icon-right` had `pointer-events: none`, which swallowed the eye button's clicks; re-enabled only for `[role='button']` icons
   - [x] Forgot password info message ("Contact admin")
   - [x] Loading state + error display
 

@@ -327,18 +327,41 @@
   box-shadow: 0 0 0 3px rgba(138, 51, 36, 0.1);
 }
 
-.input-wrapper { position: relative; }
-.has-icon .form-input { padding-left: 38px; }
-.has-icon-right .form-input { padding-right: 38px; }
+.input-wrapper {
+  /* Icon geometry — the text padding below is *derived* from these, so
+     changing the icon size or inset can never reintroduce an overlap.
+     --icon-inset matches .form-input's horizontal padding (12px). */
+  --icon-inset: 12px;
+  --icon-size: 16px;
+  --icon-gap: 10px;
+  position: relative;
+}
+/* The modifier may sit on the input itself (form-input has-icon) or on the
+   wrapper (has-icon .form-input) — support both. */
+.form-input.has-icon,
+.has-icon .form-input {
+  padding-left: calc(var(--icon-inset) + var(--icon-size) + var(--icon-gap));
+}
+.form-input.has-icon-right,
+.has-icon-right .form-input {
+  padding-right: calc(var(--icon-inset) + var(--icon-size) + var(--icon-gap));
+}
 .input-icon, .input-icon-right {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
+  width: var(--icon-size);
+  height: var(--icon-size);
   color: var(--ink-3);
-  pointer-events: none;
+  pointer-events: none; /* decorative icons must not eat clicks meant for the input */
 }
-.input-icon { left: 12px; }
-.input-icon-right { right: 12px; }
+.input-icon { left: var(--icon-inset); }
+.input-icon-right { right: var(--icon-inset); }
+/* …except when the trailing icon is a real control (password show/hide). */
+.input-icon-right[role='button'] {
+  pointer-events: auto;
+  cursor: pointer;
+}
 
 /* ═══════════════════════════════════════════════════ TABLES */
 /* Ledger tables: ruled header, hairline rows, tabular figures. */
