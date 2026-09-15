@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { GraduationCap, Plus, Pencil, Trash, Search, Upload, Users } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { GraduationCap, Plus, Pencil, Trash, Upload, Users } from 'lucide-react';
 import Modal from '../../components/Modal';
 import api from '../../services/api';
 import { loadOptions } from '../../services/options';
@@ -65,6 +65,25 @@ export default function AdminStudents() {
     load().finally(() => setLoading(false));
   }, []);
 
+  // Live search as you type (debounced): only the class-group list is refetched —
+  // the students list and dropdown options are unaffected by the query.
+  const firstSearch = useRef(true);
+  useEffect(() => {
+    if (firstSearch.current) {
+      firstSearch.current = false;
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const res = await api.get('/admin/students/by-class', { params: q ? { q } : undefined });
+        setClasses(res.data.data);
+      } catch {
+        /* keep the current view; the page reload / toast will surface API errors */
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [q]);
+
   const membersFor = (c) => {
     const byId = new Map(students.map((s) => [s.id, s]));
     return (c.studentIds || []).map((id) => byId.get(id)).filter(Boolean);
@@ -94,11 +113,6 @@ export default function AdminStudents() {
     });
     setError('');
     setModal({ mode: 'edit', student: s });
-  };
-
-  const handleSearch = (e) => {
-    e.preventDefault();
-    load();
   };
 
   const handleDelete = async (s) => {
@@ -188,7 +202,7 @@ export default function AdminStudents() {
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--sp-md)', flexWrap: 'wrap', marginBottom: 'var(--sp-lg)' }}>
-        <form onSubmit={handleSearch} style={{ display: 'flex', gap: 'var(--sp-sm)', flex: 1, maxWidth: 380 }}>
+        <div style={{ flex: 1, maxWidth: 380 }}>
           <input
             className="form-input"
             placeholder="Search name, roll no, class…"
@@ -196,10 +210,7 @@ export default function AdminStudents() {
             onChange={(e) => setQ(e.target.value)}
             aria-label="Search students"
           />
-          <button className="btn btn-secondary" type="submit" aria-label="Search">
-            <Search size={15} />
-          </button>
-        </form>
+        </div>
         <div style={{ display: 'flex', gap: 'var(--sp-sm)' }}>
           <button
             className="btn btn-secondary"
