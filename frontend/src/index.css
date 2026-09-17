@@ -77,6 +77,7 @@
   --shadow-lg: 0 24px 48px -16px rgba(33, 28, 21, 0.28);
 
   --sidebar-w: 252px;
+  --sidebar-rail-w: 64px;      /* collapsed icon-only rail */
   --sidebar-bg: #241f17;
   --sidebar-text: #cfc7b4;
 }
@@ -137,8 +138,14 @@ input, select, textarea { font-family: inherit; }
   padding: var(--sp-2xl) var(--sp-3xl) 96px;
 }
 
+/* Collapsed rail is pinned on every viewport, so content always clears it */
+.app-layout.sidebar-closed .main-content { margin-left: var(--sidebar-rail-w); }
+
 /* Pinned-open sidebar reserves its width and pushes the content (desktop only) */
 .app-layout.viewport-desktop.sidebar-open .main-content { margin-left: var(--sidebar-w); }
+
+/* On small screens the expanded panel overlays as a drawer — content stays put */
+.app-layout.viewport-mobile.sidebar-open .main-content { margin-left: 0; }
 
 /* Dimmed backdrop behind the off-canvas drawer (small screens) — tap to dismiss */
 .sidebar-overlay {

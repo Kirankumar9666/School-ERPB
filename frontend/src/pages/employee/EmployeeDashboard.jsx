@@ -18,7 +18,7 @@ const SHORTCUTS = [
 ];
 
 /**
- * Employee Dashboard — profile summary + date + quick-access shortcuts.
+ * Employee Dashboard — profile summary + quick-access shortcuts.
  */
 export default function EmployeeDashboard() {
   const { user } = useAuth();
@@ -32,16 +32,12 @@ export default function EmployeeDashboard() {
     }
   }, [user]);
 
-  const today = new Date();
-  const dateStr = today.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-
   return (
     <div className="page fade-in">
       {/* Greeting / summary banner */}
       <div className="greeting-banner">
         <div>
-          <div style={{ fontSize: 13, color: 'var(--clr-text-muted)' }}>{dateStr}</div>
-          <div className="greeting-text" style={{ marginTop: 4 }}>Welcome back, {user?.name?.split(' ')[0]} 👋</div>
+          <div className="greeting-text">Welcome back, {user?.name?.split(' ')[0]} 👋</div>
           {profile && (
             <div style={{ marginTop: 8, fontSize: 13, color: 'var(--clr-text-muted)' }}>
               {profile.employeeId} &nbsp;|&nbsp; {profile.designation} · {profile.department}

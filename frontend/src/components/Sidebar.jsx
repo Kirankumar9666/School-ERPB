@@ -4,7 +4,7 @@ import { ROLES, EMPLOYEE_ROLES } from '../constants/roles';
 import {
   LayoutDashboard, User, CalendarDays, BookOpen, ClipboardList,
   Bell, Umbrella, DollarSign, Clock, Users, FileText,
-  LogOut, BookMarked, Trophy, PartyPopper, Upload, KeyRound, FolderUp, X
+  LogOut, BookMarked, Trophy, PartyPopper, Upload, KeyRound, FolderUp, Menu
 } from 'lucide-react';
 
 /** Navigation config per role */
@@ -105,17 +105,22 @@ NAV_CONFIG[ROLES.ADMIN] = {
 /**
  * Sidebar — the portal's navigation panel (same nav list for every role).
  *
- * It renders inside the collapsible container owned by ProtectedLayout: the
- * layout decides whether the panel is pinned open (desktop), slid off-canvas, or
- * open as an overlay drawer — this component only supplies the content plus the
- * callbacks the drawer needs.
+ * Collapsible icon rail: expanded it shows the logo block, the user profile and
+ * icon+label nav items; collapsed it shrinks to a narrow icon-only rail (the
+ * labels, logo and profile text are hidden by CSS). The panel NEVER leaves the
+ * screen, so the ☰ toggle pinned top-left above the logo is always reachable —
+ * on desktop
+ * the expanded panel pushes the content; on small screens it overlays as a
+ * dismissable drawer (backdrop + Escape, owned by ProtectedLayout).
  *
  * @param {object} props
+ * @param {boolean} props.sidebarOpen Current state (drives aria-expanded).
+ * @param {Function} props.onToggleSidebar Toggle handler owned by ProtectedLayout.
+ * @param {object} [props.toggleRef] Ref to the toggle, used to restore focus.
  * @param {Function} [props.onNavigate] Fired when a nav item is chosen; the
- *   layout uses it to dismiss the drawer on small screens.
- * @param {Function} [props.onClose] Dismisses the drawer (mobile close button).
+ *   layout uses it to collapse the drawer on small screens.
  */
-export default function Sidebar({ onNavigate, onClose }) {
+export default function Sidebar({ sidebarOpen, onToggleSidebar, toggleRef, onNavigate }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
@@ -131,8 +136,30 @@ export default function Sidebar({ onNavigate, onClose }) {
     navigate('/login', { replace: true });
   };
 
+  const toggleLabel = sidebarOpen ? 'Hide navigation menu' : 'Show navigation menu';
+
   return (
     <aside id="app-sidebar" className="sidebar">
+      {/* ☰ — pinned TOP-LEFT, directly above the logo, in BOTH states (CSS pins
+          it at the same pixels whether the panel is a rail or expanded); it
+          flips the panel between the two. A real button: keyboard-reachable,
+          aria-expanded mirrors the state, aria-controls points at this
+          sidebar. */}
+      <div className="sidebar-top">
+        <button
+          type="button"
+          ref={toggleRef}
+          className="sidebar-toggle"
+          onClick={onToggleSidebar}
+          aria-expanded={sidebarOpen}
+          aria-controls="app-sidebar"
+          aria-label={toggleLabel}
+          title={toggleLabel}
+        >
+          <Menu size={18} />
+        </button>
+      </div>
+
       {/* Logo */}
       <div className="sidebar-logo">
         <div className="sidebar-logo-icon">🏫</div>
@@ -140,16 +167,6 @@ export default function Sidebar({ onNavigate, onClose }) {
           <div className="sidebar-logo-text">School ERP</div>
           <div className="sidebar-logo-sub">{config.label}</div>
         </div>
-        {/* Drawer dismiss — visible on small screens only (CSS), where the open
-            panel sits over the hamburger. */}
-        <button
-          type="button"
-          className="sidebar-close"
-          onClick={onClose}
-          aria-label="Close navigation menu"
-        >
-          <X size={15} />
-        </button>
       </div>
 
       {/* User */}
@@ -175,7 +192,7 @@ export default function Sidebar({ onNavigate, onClose }) {
                 onClick={onNavigate}
               >
                 {item.icon}
-                {item.label}
+                <span className="nav-label">{item.label}</span>
               </NavLink>
             ))}
           </div>
@@ -186,7 +203,7 @@ export default function Sidebar({ onNavigate, onClose }) {
       <div className="sidebar-footer">
         <button className="nav-item" onClick={handleLogout} id="btn-logout">
           <LogOut size={16} />
-          Sign Out
+          <span className="nav-label">Sign Out</span>
         </button>
       </div>
     </aside>

@@ -25,9 +25,10 @@ const storedPreference = () => {
  * If user is not logged in → redirect to login.
  * If user role is not in allowedRoles → redirect to their home.
  *
- * Collapsible sidebar: this layout owns the open/collapsed state, the off-canvas
- * drawer and its backdrop. Desktop keeps the sidebar pinned open by default and
- * pushes the content; smaller screens overlay it with a dismissable backdrop.
+ * Collapsible sidebar: this layout owns the expanded/collapsed state. Expanded,
+ * the panel is pinned open on desktop (pushing the content) or overlays as a
+ * dismissable drawer on small screens; collapsed, it shrinks to a pinned
+ * icon-only rail on every viewport. A saved preference survives reloads.
  */
 export default function ProtectedLayout({ allowedRoles, navTitle, navSubtitle }) {
   const { user, isAuthenticated, loading } = useAuth();
@@ -37,14 +38,14 @@ export default function ProtectedLayout({ allowedRoles, navTitle, navSubtitle })
      A saved preference always wins, so the choice survives reloads and route
      changes — the layout stays mounted while admin pages come and go. */
   const [isDesktop, setIsDesktop] = useState(isDesktopViewport);
-  // Desktop honours the saved preference (default: pinned open). The drawer on
-  // smaller screens always starts closed, so it never covers the page on load.
+  // Desktop honours the saved preference (default: expanded). Smaller screens
+  // start on the collapsed icon rail, so the drawer never covers the page on load.
   const [sidebarOpen, setSidebarOpen] = useState(() => (
     isDesktopViewport() ? (storedPreference() ?? true) : false
   ));
   const sidebarToggleRef = useRef(null);
 
-  /** Close the sidebar; optionally hand focus back to the hamburger */
+  /** Close the sidebar; optionally hand focus back to the sidebar toggle */
   const closeSidebar = useCallback((restoreFocus = false) => {
     setSidebarOpen(false);
     if (restoreFocus) sidebarToggleRef.current?.focus();
@@ -106,10 +107,12 @@ export default function ProtectedLayout({ allowedRoles, navTitle, navSubtitle })
 
   return (
     <div className={layoutClass}>
-      {/* Choosing a link dismisses the drawer; the pinned desktop panel stays put */}
+      {/* Choosing a link collapses the drawer on small screens; the pinned panel stays */}
       <Sidebar
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={toggleSidebar}
+        toggleRef={sidebarToggleRef}
         onNavigate={() => { if (!isDesktop) closeSidebar(); }}
-        onClose={() => closeSidebar(true)}
       />
 
       {/* Backdrop for the off-canvas drawer — tapping it dismisses the sidebar */}
@@ -121,9 +124,6 @@ export default function ProtectedLayout({ allowedRoles, navTitle, navSubtitle })
         <Navbar
           title={navTitle}
           subtitle={navSubtitle}
-          sidebarOpen={sidebarOpen}
-          onToggleSidebar={toggleSidebar}
-          toggleRef={sidebarToggleRef}
         />
         <main>
           <Outlet />
