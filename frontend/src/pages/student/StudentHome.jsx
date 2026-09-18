@@ -34,8 +34,6 @@ export default function StudentHome() {
   }, [user]);
 
   const initials = user?.name?.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase() || '?';
-  const today = new Date();
-  const dateStr = today.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
   return (
     <div className="page fade-in">
@@ -48,7 +46,6 @@ export default function StudentHome() {
             <span style={{ fontSize: 14, fontWeight: 500 }}>{greeting.text}</span>
           </div>
           <div className="greeting-text">{user?.name} 👋</div>
-          <div className="greeting-date">{dateStr}</div>
           {profile && (
             <div style={{ marginTop: 8, fontSize: 13, color: 'var(--clr-text-muted)' }}>
               Class {profile.class} – Section {profile.section} &nbsp;|&nbsp; Roll: {profile.rollNumber}

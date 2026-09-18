@@ -49,6 +49,7 @@ const AdminSyllabus = lazy(() => import('./pages/admin/AdminSyllabus'))
 const AdminAchievements = lazy(() => import('./pages/admin/AdminAchievements'))
 const AdminDocuments = lazy(() => import('./pages/admin/AdminDocuments'))
 const AdminUsers = lazy(() => import('./pages/admin/AdminUsers'))
+const AdminPayroll = lazy(() => import('./pages/admin/AdminPayroll'))
 
 /** Map role → home path (single source of truth) */
 const ROLE_HOME = {
@@ -120,6 +121,7 @@ export default function App() {
             <Route path="/admin" element={<AdminDashboard />} />
             <Route path="/admin/students" element={<AdminStudents />} />
             <Route path="/admin/employees" element={<AdminEmployees />} />
+            <Route path="/admin/payroll" element={<AdminPayroll />} />
             <Route path="/admin/attendance" element={<AdminAttendance />} />
             <Route path="/admin/marks" element={<AdminMarks />} />
             <Route path="/admin/timetable" element={<AdminTimetable />} />

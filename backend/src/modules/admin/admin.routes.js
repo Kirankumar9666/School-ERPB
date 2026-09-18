@@ -22,9 +22,11 @@ const {
   mapStudent,
   mapEmployee,
   mapLeave,
+  mapPayroll,
   mapUserPublic,
   mapPeriod,
   mapAchievement,
+  monthLabel,
   statusToDb,
   statusToApi,
   classIdOf,
@@ -666,6 +668,143 @@ router.put('/leaves/:leaveId/status', async (req, res) => {
     if (err.code === 'P2025') return sendError(res, 'Leave record not found', 404, 'NOT_FOUND');
     throw err;
   }
+});
+
+/* ---------- Payroll ---------- */
+
+/**
+ * Payroll status is DERIVED, never stored: a PayrollRecord with a paidOn date
+ * is 'paid', everything else is 'pending' — the same rule the employee portal
+ * renders as "Payment pending".
+ */
+const payrollStatus = (r) => (r.paidOn ? 'paid' : 'pending');
+
+/** Strict month key: 'YYYY-MM' with a real month (01–12) */
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+/** Net payable — always recomputed server-side from the saved components. */
+const netOf = (p) =>
+  p.basicPay + p.hra + p.transportAllowance + p.medicalAllowance -
+  p.providentFund - p.professionalTax - p.tds;
+
+/**
+ * GET /api/v1/admin/payroll — every employee with their full payment history.
+ * One query per table, grouped in memory: employees + all payroll records,
+ * keyed by employeeId. Status is derived per record (paid/pending).
+ */
+router.get('/payroll', async (req, res) => {
+  const [employees, records] = await Promise.all([
+    prisma.employee.findMany({ orderBy: { id: 'asc' } }),
+    prisma.payrollRecord.findMany({ orderBy: [{ employeeId: 'asc' }, { month: 'asc' }] }),
+  ]);
+
+  const history = {};
+  records.forEach((r) => {
+    (history[r.employeeId] ??= []).push({ id: r.id, ...mapPayroll(r), status: payrollStatus(r) });
+  });
+
+  return sendSuccess(res, employees.map((e) => ({
+    id: e.id,
+    name: e.name,
+    employeeId: e.employeeId,
+    department: e.department,
+    designation: e.designation,
+    role: e.role,
+    status: e.status,
+    payroll: history[e.id] || [],
+  })));
+});
+
+/** Editable salary components — the request never supplies netSalary. */
+const payrollSchema = z.object({
+  basicPay: z.number().int().min(0).max(10000000),
+  hra: z.number().int().min(0).max(10000000).default(0),
+  transportAllowance: z.number().int().min(0).max(10000000).default(0),
+  medicalAllowance: z.number().int().min(0).max(10000000).default(0),
+  providentFund: z.number().int().min(0).max(10000000).default(0),
+  professionalTax: z.number().int().min(0).max(10000000).default(0),
+  tds: z.number().int().min(0).max(10000000).default(0),
+});
+
+/**
+ * PUT /api/v1/admin/payroll/:employeeId/:month — create or update the salary
+ * breakdown for one month (upsert on the employeeId+month unique pair), with
+ * netSalary recomputed here so a tampered client can't post a wrong net.
+ *
+ * Pending months only: once a month is paid its record is immutable (the slip
+ * already went out) — subsequent months should be set up instead. Returns 409
+ * ALREADY_PAID otherwise.
+ */
+router.put('/payroll/:employeeId/:month', async (req, res) => {
+  const { employeeId, month } = req.params;
+  if (!MONTH_RE.test(month)) return sendError(res, 'Month must be YYYY-MM', 400, 'VALIDATION_ERROR');
+  const parsed = payrollSchema.safeParse(req.body);
+  if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
+
+  const employee = await prisma.employee.findUnique({ where: { id: employeeId } });
+  if (!employee) return sendError(res, 'Employee not found', 404, 'NOT_FOUND');
+
+  const existing = await prisma.payrollRecord.findUnique({
+    where: { employeeId_month: { employeeId, month } },
+  });
+  if (existing?.paidOn) {
+    return sendError(
+      res,
+      `${monthLabel(month)} payroll is already paid — paid months cannot be edited`,
+      409,
+      'ALREADY_PAID',
+    );
+  }
+
+  const net = netOf(parsed.data);
+  if (net < 0) return sendError(res, 'Deductions exceed total earnings', 400, 'INVALID_PAYROLL');
+
+  const saved = await prisma.payrollRecord.upsert({
+    where: { employeeId_month: { employeeId, month } },
+    update: { ...parsed.data, netSalary: net },
+    create: { employeeId, month, ...parsed.data, netSalary: net },
+  });
+
+  return sendSuccess(
+    res,
+    { id: saved.id, ...mapPayroll(saved), status: payrollStatus(saved) },
+    'Salary structure saved',
+  );
+});
+
+/** POST /api/v1/admin/payroll/:employeeId/:month/mark-paid body */
+const markPaidSchema = z.object({
+  /** 'YYYY-MM-DD'; omitted → today (UTC) */
+  paidDate: dateStr.optional(),
+});
+
+/**
+ * POST /api/v1/admin/payroll/:employeeId/:month/mark-paid — record the payment
+ * for a pending month. The record must exist (save the salary structure first)
+ * and must not already be paid.
+ */
+router.post('/payroll/:employeeId/:month/mark-paid', async (req, res) => {
+  const { employeeId, month } = req.params;
+  if (!MONTH_RE.test(month)) return sendError(res, 'Month must be YYYY-MM', 400, 'VALIDATION_ERROR');
+  const parsed = markPaidSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
+
+  const record = await prisma.payrollRecord.findUnique({
+    where: { employeeId_month: { employeeId, month } },
+  });
+  if (!record) {
+    return sendError(res, 'No payroll record for this month — save the salary structure first', 404, 'NOT_FOUND');
+  }
+  if (record.paidOn) {
+    return sendError(res, `${monthLabel(month)} payroll is already paid`, 409, 'ALREADY_PAID');
+  }
+
+  const updated = await prisma.payrollRecord.update({
+    where: { employeeId_month: { employeeId, month } },
+    data: { paidOn: parsed.data.paidDate ? apiDate(parsed.data.paidDate) : apiDate(new Date().toISOString().slice(0, 10)) },
+  });
+
+  return sendSuccess(res, { id: updated.id, ...mapPayroll(updated), status: 'paid' }, 'Payroll marked as paid');
 });
 
 /* ---------- Announcements ---------- */

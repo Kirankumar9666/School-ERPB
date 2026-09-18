@@ -72,6 +72,7 @@ NAV_CONFIG[ROLES.ADMIN] = {
         { to: '/admin',              icon: <LayoutDashboard size={16} />, label: 'Dashboard' },
         { to: '/admin/students',     icon: <Users size={16} />,           label: 'Students' },
         { to: '/admin/employees',    icon: <User size={16} />,            label: 'Employees' },
+        { to: '/admin/payroll',      icon: <DollarSign size={16} />,      label: 'Payroll' },
         { to: '/admin/attendance',   icon: <CalendarDays size={16} />,    label: 'Attendance' },
         { to: '/admin/marks',        icon: <ClipboardList size={16} />,   label: 'Marks Entry' },
         { to: '/admin/timetable',    icon: <Clock size={16} />,           label: 'Timetable' },
@@ -107,11 +108,11 @@ NAV_CONFIG[ROLES.ADMIN] = {
  *
  * Collapsible icon rail: expanded it shows the logo block, the user profile and
  * icon+label nav items; collapsed it shrinks to a narrow icon-only rail (the
- * labels, logo and profile text are hidden by CSS). The panel NEVER leaves the
- * screen, so the ☰ toggle pinned top-left above the logo is always reachable —
- * on desktop
- * the expanded panel pushes the content; on small screens it overlays as a
- * dismissable drawer (backdrop + Escape, owned by ProtectedLayout).
+ * labels, brand text and profile text are hidden by CSS). The panel NEVER
+ * leaves the screen, so the ☰ toggle pinned top-left above the logo is always
+ * reachable — on desktop the expanded panel pushes the content; on small
+ * screens it overlays as a dismissable drawer (backdrop + Escape, owned by
+ * ProtectedLayout).
  *
  * @param {object} props
  * @param {boolean} props.sidebarOpen Current state (drives aria-expanded).
