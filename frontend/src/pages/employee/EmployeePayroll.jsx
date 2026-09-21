@@ -1,18 +1,23 @@
 import { useEffect, useState } from 'react';
-import { DollarSign, Download, Info } from 'lucide-react';
+import { DollarSign, Download, Info, Loader2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
-import { downloadTextFile } from '../../utils/download';
+import toast from 'react-hot-toast';
+import { downloadBlob, filenameFromDisposition, payslipFilename } from '../../utils/download';
 
 const formatINR = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
 
 /**
  * Employee Payroll — monthly salary details (read-only) + downloadable slip.
+ * The Slip button fetches a server-generated PDF payslip (composed from the
+ * employee's profile + that month's payroll record) and saves it under the
+ * filename the backend chose.
  */
 export default function EmployeePayroll() {
   const { user } = useAuth();
   const [payroll, setPayroll] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(null); // month currently generating
 
   useEffect(() => {
     if (!user?.linkedEntityId) return;
@@ -21,26 +26,22 @@ export default function EmployeePayroll() {
       .finally(() => setLoading(false));
   }, [user]);
 
-  const downloadSlip = (p) => {
-    const lines = [
-      '==================================================',
-      '          STUDENT SCHOOL ERP — SALARY SLIP',
-      '==================================================',
-      `Employee ID   : ${user.linkedEntityId}`,
-      `Employee      : ${user.name}`,
-      `Pay Month     : ${p.monthLabel}`,
-      '--------------------------------------------------',
-      `Basic Pay     : ${formatINR(p.basicPay)}`,
-      ...Object.entries(p.allowances).map(([k, v]) => `${k.replace(/([A-Z])/g, ' $1').trim()} (Allowance): ${formatINR(v)}`),
-      '--------------------------------------------------',
-      ...Object.entries(p.deductions).map(([k, v]) => `${k.toUpperCase()} (Deduction)  : ${formatINR(v)}`),
-      '--------------------------------------------------',
-      `NET SALARY    : ${formatINR(p.netSalary)}`,
-      `Paid On       : ${p.paidOn || 'Pending'}`,
-      '==================================================',
-      'This is a system-generated payslip (demo).',
-    ];
-    downloadTextFile(`salary_slip_${p.month}.txt`, lines.join('\n'));
+  const downloadSlip = async (p) => {
+    setDownloading(p.month);
+    try {
+      const res = await api.get(
+        `/employees/${user.linkedEntityId}/payroll/${p.month}/slip`,
+        { responseType: 'blob' },
+      );
+      const filename = filenameFromDisposition(res.headers?.['content-disposition'])
+        || payslipFilename(user.name, p.month);
+      downloadBlob(new Blob([res.data], { type: 'application/pdf' }), filename);
+      toast.success('Salary slip downloaded.');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Could not download the slip.');
+    } finally {
+      setDownloading(null);
+    }
   };
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
@@ -74,13 +75,18 @@ export default function EmployeePayroll() {
                   <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--clr-success)' }}>{formatINR(p.netSalary)}</div>
                   <div className="text-sm text-muted">Net Salary</div>
                 </div>
-                <button className="btn btn-secondary btn-sm" onClick={() => downloadSlip(p)} aria-label="Download salary slip">
-                  <Download size={16} /> Slip
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => downloadSlip(p)}
+                  disabled={downloading === p.month}
+                  aria-label="Download salary slip"
+                >
+                  {downloading === p.month ? <Loader2 size={16} className="spin" /> : <Download size={16} />} Slip
                 </button>
               </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-lg)', marginTop: 'var(--sp-lg)' }}>
+            <div className="form-grid-2" style={{ gap: 'var(--sp-lg)', marginTop: 'var(--sp-lg)' }}>
               <div>
                 <div className="section-title" style={{ fontSize: 13 }}>Earnings</div>
                 <div className="card" style={{ padding: 'var(--sp-md)' }}>

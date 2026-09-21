@@ -24,6 +24,14 @@ const MOCK_HOLIDAYS = [
   { id: 'hol-007', date: '2027-01-26', name: 'Republic Day' },
 ];
 
+/**
+ * Each announcement carries its visibility window (showFrom ≤ today ≤
+ * showUntil, both inclusive) — the portals hide anything outside it. The
+ * windows below are fixture values aligned with the notice content and kept
+ * open past their event dates (e.g. the staff meeting stays listed after the
+ * 12th) so the demo data and the role-filtering tests stay deterministic
+ * around the seed timeline.
+ */
 const MOCK_ANNOUNCEMENTS = [
   {
     id: 'ann-001',
@@ -32,6 +40,8 @@ const MOCK_ANNOUNCEMENTS = [
     targetRoles: ['student', 'teacher', 'parent'],
     createdAt: '2026-09-08T10:00:00Z',
     category: 'event',
+    showFrom: '2026-09-08',
+    showUntil: '2026-10-16',
   },
   {
     id: 'ann-002',
@@ -40,6 +50,8 @@ const MOCK_ANNOUNCEMENTS = [
     targetRoles: ['teacher', 'accountant', 'librarian'],
     createdAt: '2026-09-07T09:00:00Z',
     category: 'meeting',
+    showFrom: '2026-09-07',
+    showUntil: '2026-09-30',
   },
   {
     id: 'ann-003',
@@ -48,6 +60,8 @@ const MOCK_ANNOUNCEMENTS = [
     targetRoles: ['student', 'teacher', 'parent'],
     createdAt: '2026-09-05T08:00:00Z',
     category: 'exam',
+    showFrom: '2026-09-05',
+    showUntil: '2026-09-26',
   },
   {
     id: 'ann-004',
@@ -56,6 +70,8 @@ const MOCK_ANNOUNCEMENTS = [
     targetRoles: ['student', 'teacher', 'accountant', 'librarian', 'parent'],
     createdAt: '2026-09-01T08:00:00Z',
     category: 'holiday',
+    showFrom: '2026-09-01',
+    showUntil: '2026-10-28',
   },
 ];
 

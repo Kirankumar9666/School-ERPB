@@ -44,6 +44,7 @@ const AdminMarks = lazy(() => import('./pages/admin/AdminMarks'))
 const AdminTimetable = lazy(() => import('./pages/admin/AdminTimetable'))
 const AdminAnnouncements = lazy(() => import('./pages/admin/AdminAnnouncements'))
 const AdminHolidays = lazy(() => import('./pages/admin/AdminHolidays'))
+const AdminCalendar = lazy(() => import('./pages/admin/AdminCalendar'))
 const AdminLeaves = lazy(() => import('./pages/admin/AdminLeaves'))
 const AdminSyllabus = lazy(() => import('./pages/admin/AdminSyllabus'))
 const AdminAchievements = lazy(() => import('./pages/admin/AdminAchievements'))
@@ -127,6 +128,7 @@ export default function App() {
             <Route path="/admin/timetable" element={<AdminTimetable />} />
             <Route path="/admin/announcements" element={<AdminAnnouncements />} />
             <Route path="/admin/holidays" element={<AdminHolidays />} />
+            <Route path="/admin/calendar" element={<AdminCalendar />} />
             <Route path="/admin/leaves" element={<AdminLeaves />} />
             <Route path="/admin/syllabus" element={<AdminSyllabus />} />
             <Route path="/admin/achievements" element={<AdminAchievements />} />

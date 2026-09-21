@@ -6,10 +6,15 @@
  * than a fixed range — and because a school can open a new class at any time the
  * fields stay free-entry: the API creates the class row on save.
  *
+ * Guardian Contact uses the shared PhoneInput (digits-only, exactly 10; the
+ * '+91-' prefix is static text added on save).
+ *
  * @param {object} form   - current form values
  * @param {function} setForm - state setter
  * @param {object} options - reference options ({ classes: [...] })
  */
+import PhoneInput from '../../components/PhoneInput';
+
 export default function studentForm(form, setForm, options = {}) {
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
@@ -19,7 +24,7 @@ export default function studentForm(form, setForm, options = {}) {
   const sections = [...new Set(classes.map((c) => c.section))];
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-md)' }}>
+    <div className="form-grid-2">
       <div className="form-group">
         <label className="form-label">Full Name *</label>
         <input className="form-input" value={form.name} onChange={set('name')} placeholder="e.g. Arjun Kumar" />
@@ -62,7 +67,11 @@ export default function studentForm(form, setForm, options = {}) {
       </div>
       <div className="form-group">
         <label className="form-label">Guardian Contact</label>
-        <input className="form-input" value={form.guardianContact} onChange={set('guardianContact')} placeholder="+91-XXXXXXXXXX" />
+        <PhoneInput
+          value={form.guardianContact}
+          onChange={(v) => setForm({ ...form, guardianContact: v })}
+          ariaLabel="Guardian contact number"
+        />
       </div>
       <div className="form-group">
         <label className="form-label">Admission Year</label>

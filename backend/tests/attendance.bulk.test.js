@@ -130,6 +130,18 @@ test('admin attendance group + bulk confirm: atomic save, edit window, RBAC', as
     assert.equal(grp.body.data.members.length, expected, 'roster matches the live group');
     assert.ok(expected > 0, 'group is non-empty');
 
+    // Idempotency (same as the student flow above): the DB persists between
+    // runs, so a confirmation left by an earlier run would have closed the
+    // 1-hour edit window and fail this save with EDIT_LOCKED.
+    const prismaEmp = require('../src/services/prisma');
+    const memberIds = grp.body.data.members.map((m) => m.id);
+    await prismaEmp.attendanceConfirmation.deleteMany({
+      where: { kind: 'employee', groupKey: designation, date: new Date(`${today}T00:00:00.000Z`) },
+    });
+    await prismaEmp.employeeAttendance.deleteMany({
+      where: { employeeId: { in: memberIds }, date: new Date(`${today}T00:00:00.000Z`) },
+    });
+
     const entries = grp.body.data.members.map((m, i) => ({ entityId: m.id, status: i === 0 ? 'absent' : 'present' }));
     const res = await request(base, '/admin/attendance/bulk', {
       method: 'POST', token: admin.accessToken,

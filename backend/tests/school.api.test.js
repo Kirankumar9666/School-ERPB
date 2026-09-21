@@ -29,6 +29,67 @@ test('announcements are role-filtered', async () => {
   assert.ok(forStaff.body.data.some((a) => a.title.includes('Staff Meeting')), 'staff sees staff meeting');
 });
 
+test('reminders: private per-user CRUD', async () => {
+  // Invalid payloads are rejected before anything is stored.
+  const badDate = await request(ctx.base, '/school/reminders', {
+    method: 'POST', token: student.accessToken,
+    body: { date: '01/10/2026', title: 'Bad date format' },
+  });
+  assert.equal(badDate.status, 400);
+
+  const blankTitle = await request(ctx.base, '/school/reminders', {
+    method: 'POST', token: student.accessToken,
+    body: { date: '2026-10-01', title: '   ' },
+  });
+  assert.equal(blankTitle.status, 400);
+
+  // A student sets a reminder for themselves.
+  const created = await request(ctx.base, '/school/reminders', {
+    method: 'POST', token: student.accessToken,
+    body: { date: '2026-10-01', title: 'Prepare for science fair' },
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.data.date, '2026-10-01');
+  assert.equal(created.body.data.title, 'Prepare for science fair');
+  const id = created.body.data.id;
+
+  // The owner sees it, soonest first.
+  const mine = await request(ctx.base, '/school/reminders', { token: student.accessToken });
+  assert.ok(mine.body.data.some((r) => r.id === id), 'owner sees their own reminder');
+
+  // Privacy: nobody else's list contains it, and nobody else can delete it.
+  const theirs = await request(ctx.base, '/school/reminders', { token: teacher.accessToken });
+  assert.ok(!theirs.body.data.some((r) => r.id === id), 'other users never see this reminder');
+
+  const foreignDelete = await request(ctx.base, `/school/reminders/${id}`, {
+    method: 'DELETE', token: teacher.accessToken,
+  });
+  assert.equal(foreignDelete.status, 404, "another user's reminder is not deletable");
+
+  const stillThere = await request(ctx.base, '/school/reminders', { token: student.accessToken });
+  assert.ok(stillThere.body.data.some((r) => r.id === id), 'foreign delete attempt left the reminder intact');
+
+  // Two reminders sort soonest first regardless of creation order.
+  const later = await request(ctx.base, '/school/reminders', {
+    method: 'POST', token: student.accessToken,
+    body: { date: '2026-11-20', title: 'Project submission' },
+  });
+  assert.equal(later.status, 201);
+
+  const sorted = await request(ctx.base, '/school/reminders', { token: student.accessToken });
+  const dates = sorted.body.data.filter((r) => [id, later.body.data.id].includes(r.id)).map((r) => r.date);
+  assert.deepEqual(dates, ['2026-10-01', '2026-11-20'], 'own reminders sort soonest first');
+
+  // Owner can delete their own reminder.
+  const del = await request(ctx.base, `/school/reminders/${id}`, { method: 'DELETE', token: student.accessToken });
+  assert.equal(del.status, 200);
+  const after = await request(ctx.base, '/school/reminders', { token: student.accessToken });
+  assert.ok(!after.body.data.some((r) => r.id === id), 'deleted reminder is gone');
+
+  // Cleanup so other assertions see only seeded data.
+  await request(ctx.base, `/school/reminders/${later.body.data.id}`, { method: 'DELETE', token: student.accessToken });
+});
+
 test('holidays: full list and month filter', async () => {
   const all = await request(ctx.base, '/school/holidays', { token: teacher.accessToken });
   assert.equal(all.status, 200);

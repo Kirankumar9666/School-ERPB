@@ -6,7 +6,8 @@
 //   value translation.
 // - Money is Int (whole rupees, matching the mock data model).
 // - Calendar dates are @db.Date; timestamps are plain DateTime.
-// - targetRoles / syllabus topics use Postgres scalar lists.
+// - targetRoles uses a Postgres scalar list; syllabus topics are JSON
+//   ({ topic, done } per entry — completion is derived, never stored).
 // - The seed (prisma/seed.js) preserves the existing mock ids (stu-001,
 //   cls-10A, ...) so API URLs stay stable after the swap.
 
@@ -82,6 +83,7 @@ model User {
   student      Student?
   employee     Employee?
   auditEntries AuditEntry[]
+  reminders    Reminder[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 }
@@ -141,6 +143,7 @@ model Student {
   attendance      StudentAttendance[]
   marks           MarksEntry[]
   achievements    Achievement[]
+  documents       StudentDocument[]
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -171,6 +174,17 @@ model Employee {
   reportingPrincipal String?
   employmentType     EmploymentType?
   status             AccountStatus   @default(active)
+  // Default salary structure (₹, whole rupees) — edited once per employee on
+  // the employee form and prefilled into each new PayrollRecord month; the
+  // per-month record stays fully editable for month-specific adjustments.
+  // Component set mirrors PayrollRecord exactly.
+  basicPay           Int             @default(0)
+  hra                Int             @default(0)
+  transportAllowance Int             @default(0)
+  medicalAllowance   Int             @default(0)
+  providentFund      Int             @default(0)
+  professionalTax    Int             @default(0)
+  tds                Int             @default(0)
   classesTaught      TeachingAssignment[]
   classesInCharge    Class[]         @relation("ClassTeacher")
   attendance         EmployeeAttendance[]
@@ -267,12 +281,13 @@ model TimetablePeriod {
 }
 
 model SyllabusEntry {
-  id               String   @id @default(cuid())
-  classId          String
-  class            Class    @relation(fields: [classId], references: [id])
-  subject          String
-  topics           String[]
-  completedPercent Int
+  id      String @id @default(cuid())
+  classId String
+  class   Class  @relation(fields: [classId], references: [id])
+  subject String
+  // Per-topic completion: [{ topic: string, done: boolean }] — the subject-level
+  // percent is always DERIVED (done count / total), never stored.
+  topics  Json
 
   @@unique([classId, subject])
 }
@@ -334,6 +349,17 @@ model EmployeeDocument {
   @@index([employeeId])
 }
 
+model StudentDocument {
+  id         String   @id @default(cuid()) // seeded as 'sdoc-001' style ids
+  studentId  String
+  student    Student  @relation(fields: [studentId], references: [id])
+  type       String
+  fileName   String
+  uploadedAt DateTime @default(now())
+
+  @@index([studentId])
+}
+
 model Announcement {
   id          String   @id @default(cuid()) // seeded as 'ann-001' style ids
   title       String
@@ -341,12 +367,31 @@ model Announcement {
   targetRoles Role[]
   category    String?
   createdAt   DateTime @default(now())
+  showFrom    DateTime @db.Date // circular appears from this day (inclusive)
+  showUntil   DateTime @db.Date // circular disappears after this day (inclusive last day)
 }
 
 model Holiday {
   id   String   @id @default(cuid()) // seeded as 'hol-001' style ids
   date DateTime @unique @db.Date
   name String
+}
+
+/**
+ * Personal reminders — private per user across all three portals (student,
+ * employee, admin). Date + title set by the user for themselves; the popup
+ * behaviour (due-today check) is computed from these rows and the real
+ * current date, never from any hardcoded sample.
+ */
+model Reminder {
+  id        String   @id @default(cuid()) // 'rem-<ts>' style ids
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  date      DateTime @db.Date
+  title     String
+  createdAt DateTime @default(now())
+
+  @@index([userId, date])
 }
 
 model Achievement {

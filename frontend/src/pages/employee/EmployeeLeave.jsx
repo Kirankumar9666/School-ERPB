@@ -105,7 +105,7 @@ export default function EmployeeLeave() {
               </select>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-md)' }}>
+            <div className="form-grid-2">
               <div className="form-group">
                 <label className="form-label" htmlFor="from-date">From Date</label>
                 <input id="from-date" type="date" className="form-input" value={form.fromDate} onChange={(e) => setForm({ ...form, fromDate: e.target.value })} />

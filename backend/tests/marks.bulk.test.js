@@ -1,6 +1,7 @@
 /**
  * Bulk marks entry (CSV/XLSX) tests — POST /api/v1/admin/marks/bulk.
- * Covers long/tidy parsing, roll-number matching, per-row/per-column
+ * Covers long/tidy parsing, class-scoped roll-number matching (rows for
+ * students outside the posted classId are rejected), per-row/per-column
  * validation, atomic rejection, free-text subjects, the derived success
  * message and the recomputed class-summary/marks re-read.
  * Also covers the template download and the manual single-student path.
@@ -11,16 +12,18 @@ const assert = require('node:assert/strict');
 const ExcelJS = require('exceljs');
 const { startServer, stopServer, login, auth, request } = require('./helpers');
 
-/** Multipart POST of a file buffer → { status, body } */
-async function upload(base, token, buffer, filename, mime) {
+/** Multipart POST of a file buffer → { status, body }. The classId form field
+ * mirrors the Marks Entry page's Select Class dropdown (default: 10-A). */
+async function upload(base, token, buffer, filename, mime, classId = 'cls-10A') {
   const fd = new FormData();
   fd.append('file', new Blob([buffer], { type: mime }), filename);
+  if (classId) fd.append('classId', classId);
   const res = await fetch(`${base}/admin/marks/bulk`, { method: 'POST', headers: auth(token), body: fd });
   const text = await res.text();
   return { status: res.status, body: text ? JSON.parse(text) : {} };
 }
 
-const CSV_HEADER = 'RollNumber,StudentName,Class,Section,ExamName,ExamDate,Subject,MaxMarks,ObtainedMarks';
+const CSV_HEADER = 'RollNumber,StudentName,ExamName,ExamDate,Subject,MaxMarks,ObtainedMarks';
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 test('marks bulk upload: CSV/XLSX, atomic validation, derived stats, template', async (t) => {
@@ -41,9 +44,9 @@ test('marks bulk upload: CSV/XLSX, atomic validation, derived stats, template', 
     const csv = [
       CSV_HEADER,
       // s1 has two subjects (two rows), s2 has one — subjects are free text
-      `${roll1},${s1.name},10,A,Bulk Exam A,14-09-2026,Mathematics,100,88`,
-      `${roll1},${s1.name},10,A,Bulk Exam A,14-09-2026,Environmental Studies,50,41`,
-      `${roll2},${s2.name},10,A,Bulk Exam A,14-09-2026,Mathematics,100,79`,
+      `${roll1},${s1.name},Bulk Exam A,14-09-2026,Mathematics,100,88`,
+      `${roll1},${s1.name},Bulk Exam A,14-09-2026,Environmental Studies,50,41`,
+      `${roll2},${s2.name},Bulk Exam A,14-09-2026,Mathematics,100,79`,
     ].join('\r\n');
     const res = await upload(base, admin.accessToken, csv, 'marks.csv', 'text/csv');
 
@@ -53,7 +56,7 @@ test('marks bulk upload: CSV/XLSX, atomic validation, derived stats, template', 
     assert.equal(res.body.data.students, 2);
     assert.equal(res.body.data.exams, 1);
     // message is derived from what was actually stored, never hardcoded
-    assert.equal(res.body.message, '3 mark rows saved for 2 students in 1 exam');
+    assert.equal(res.body.message, '3 mark rows saved for 2 students in 1 exam (Class 10A)');
 
     // a free-text subject that is not in any fixed list was accepted
     const bulkExam = (await marksOf(s1.id)).find((e) => e.examName === 'Bulk Exam A');
@@ -73,7 +76,7 @@ test('marks bulk upload: CSV/XLSX, atomic validation, derived stats, template', 
   await t.test('re-uploading the same rows upserts instead of duplicating', async () => {
     const csv = [
       CSV_HEADER,
-      `${roll1},${s1.name},10,A,Bulk Exam A,14-09-2026,Mathematics,100,95`,
+      `${roll1},${s1.name},Bulk Exam A,14-09-2026,Mathematics,100,95`,
     ].join('\r\n');
     const res = await upload(base, admin.accessToken, csv, 'marks.csv', 'text/csv');
     assert.equal(res.status, 201);
@@ -88,12 +91,12 @@ await t.test('invalid rows reject the whole file and name the row + column', asy
     const before = (await marksOf(s1.id)).length;
     const csv = [
       CSV_HEADER,
-      `${roll1},${s1.name},10,A,Rejected Exam,14-09-2026,Mathematics,100,80`, // valid — must not be saved
-      `${roll2},${s2.name},10,A,Rejected Exam,14-09-2026,Science,100,120`, // ObtainedMarks > MaxMarks
-      'STU-9999-999,Nobody,10,A,Rejected Exam,14-09-2026,Science,100,50', // unknown roll number
-      `${roll1},${s1.name},10,A,Rejected Exam,31-02-2026,Science,100,50`, // impossible calendar date
-      `${roll2},${s2.name},10,A,Rejected Exam,14-09-2026,,100,50`, // missing Subject
-      `${roll2},${s2.name},10,A,Rejected Exam,14-09-2026,Science,100,abc`, // non-numeric marks
+      `${roll1},${s1.name},Rejected Exam,14-09-2026,Mathematics,100,80`, // valid — must not be saved
+      `${roll2},${s2.name},Rejected Exam,14-09-2026,Science,100,120`, // ObtainedMarks > MaxMarks
+      'STU-9999-999,Nobody,Rejected Exam,14-09-2026,Science,100,50', // unknown roll number
+      `${roll1},${s1.name},Rejected Exam,31-02-2026,Science,100,50`, // impossible calendar date
+      `${roll2},${s2.name},Rejected Exam,14-09-2026,,100,50`, // missing Subject
+      `${roll2},${s2.name},Rejected Exam,14-09-2026,Science,100,abc`, // non-numeric marks
     ].join('\r\n');
     const res = await upload(base, admin.accessToken, csv, 'bad.csv', 'text/csv');
 
@@ -101,7 +104,7 @@ await t.test('invalid rows reject the whole file and name the row + column', asy
     assert.equal(res.body.code, 'VALIDATION_ERROR');
     assert.equal(res.body.errors.row_2, undefined, 'the valid row reports no error');
     assert.match(res.body.errors.row_3.ObtainedMarks, /Cannot exceed MaxMarks/);
-    assert.match(res.body.errors.row_4.RollNumber, /No student with this roll number/);
+    assert.match(res.body.errors.row_4.RollNumber, /No student with this roll number in Class 10A/);
     assert.match(res.body.errors.row_5.ExamDate, /valid date/);
     assert.equal(res.body.errors.row_6.Subject, 'Required');
     assert.match(res.body.errors.row_7.ObtainedMarks, /whole number/);
@@ -116,7 +119,7 @@ await t.test('invalid rows reject the whole file and name the row + column', asy
   await t.test('wrong header, missing file, bad extension, empty body and >200 rows are rejected', async () => {
     const wrong = await upload(base, admin.accessToken, 'RollNumber,Subject\nx,Maths', 'wrong.csv', 'text/csv');
     assert.equal(wrong.status, 400);
-    assert.match(wrong.body.errors.file, /RollNumber, StudentName, Class, Section, ExamName, ExamDate, Subject, MaxMarks, ObtainedMarks/);
+    assert.match(wrong.body.errors.file, /RollNumber, StudentName, ExamName, ExamDate, Subject, MaxMarks, ObtainedMarks/);
 
     const none = await fetch(`${base}/admin/marks/bulk`, { method: 'POST', headers: auth(admin.accessToken) });
     assert.equal(none.status, 400);
@@ -130,7 +133,7 @@ await t.test('invalid rows reject the whole file and name the row + column', asy
 
     const tooMany = [CSV_HEADER];
     for (let i = 0; i < 201; i += 1) {
-      tooMany.push(`${roll1},${s1.name},10,A,Big Exam,14-09-2026,Subject ${i},100,50`);
+      tooMany.push(`${roll1},${s1.name},Big Exam,14-09-2026,Subject ${i},100,50`);
     }
     const over = await upload(base, admin.accessToken, tooMany.join('\r\n'), 'big.csv', 'text/csv');
     assert.equal(over.status, 400);
@@ -140,18 +143,56 @@ await t.test('invalid rows reject the whole file and name the row + column', asy
   await t.test('duplicate student/exam/subject rows inside one file are rejected', async () => {
     const csv = [
       CSV_HEADER,
-      `${roll1},${s1.name},10,A,Dup Exam,14-09-2026,Mathematics,100,70`,
-      `${roll1},${s1.name},10,A,Dup Exam,14-09-2026,Mathematics,100,80`,
+      `${roll1},${s1.name},Dup Exam,14-09-2026,Mathematics,100,70`,
+      `${roll1},${s1.name},Dup Exam,14-09-2026,Mathematics,100,80`,
     ].join('\r\n');
     const res = await upload(base, admin.accessToken, csv, 'dup.csv', 'text/csv');
     assert.equal(res.status, 400);
     assert.match(res.body.errors.row_3.Subject, /Duplicate row/);
   });
+
+  await t.test('upload without a classId (no class chosen) is rejected before parsing', async () => {
+    const csv = [CSV_HEADER, `${roll1},${s1.name},No Class Exam,14-09-2026,Mathematics,100,50`].join('\r\n');
+    const res = await upload(base, admin.accessToken, csv, 'marks.csv', 'text/csv', '');
+    assert.equal(res.status, 400);
+    assert.equal(res.body.code, 'VALIDATION_ERROR');
+    assert.match(res.body.errors.classId, /Choose a class/);
+    assert.match(res.body.errors.classId, /no longer carries a Class column/);
+  });
+
+  await t.test('rows for students of another class are rejected (class comes from the dropdown)', async () => {
+    // The class-9 student's roll number does NOT exist in the selected class 10-A
+    const nine = students.filter((s) => s.class === '9')[0];
+    assert.ok(nine, 'a class-9 student exists in the seed data');
+
+    const before = (await marksOf(s1.id)).length;
+    const csv = [
+      CSV_HEADER,
+      `${roll1},${s1.name},Scoped Exam,14-09-2026,Mathematics,100,80`, // valid row in 10-A
+      `${nine.rollNumber},${nine.name},Scoped Exam,14-09-2026,Mathematics,100,90`, // belongs to class 9
+    ].join('\r\n');
+    const res = await upload(base, admin.accessToken, csv, 'scoped.csv', 'text/csv');
+
+    assert.equal(res.status, 400);
+    assert.match(res.body.errors.row_3.RollNumber, /No student with this roll number in Class 10A/);
+    assert.match(res.body.errors.file, /Nothing was saved/);
+
+    // atomic — even the valid class-10A row is not written
+    const after = await marksOf(s1.id);
+    assert.equal(after.length, before, 'no partial save when a row is from another class');
+    assert.equal(after.some((e) => e.examName === 'Scoped Exam'), false);
+  });
+
+  await t.test('uploading for a class that does not exist is rejected', async () => {
+    const csv = [CSV_HEADER, `${roll1},${s1.name},Ghost Exam,14-09-2026,Mathematics,100,50`].join('\r\n');
+    const res = await upload(base, admin.accessToken, csv, 'marks.csv', 'text/csv', 'cls-99Z');
+    assert.equal(res.status, 404);
+  });
 await t.test('XLSX upload parses server-side (real date cells included)', async () => {
     const book = new ExcelJS.Workbook();
     const sheet = book.addWorksheet('Marks');
     sheet.addRow(CSV_HEADER.split(','));
-    sheet.addRow([roll1, s1.name, 10, 'A', 'Excel Exam', new Date(Date.UTC(2026, 8, 14)), 'Computer Science', 100, 91]);
+    sheet.addRow([roll1, s1.name, 'Excel Exam', new Date(Date.UTC(2026, 8, 14)), 'Computer Science', 100, 91]);
     const buf = await book.xlsx.writeBuffer();
     const res = await upload(base, admin.accessToken, buf, 'marks.xlsx', XLSX_MIME);
 

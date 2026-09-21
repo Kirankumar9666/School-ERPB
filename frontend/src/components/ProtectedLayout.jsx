@@ -3,6 +3,7 @@ import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import Sidebar from './Sidebar';
 import Navbar from './Navbar';
+import ReminderPopup from './ReminderPopup';
 
 /** Viewport width (px) from which the sidebar is pinned open by default. */
 const DESKTOP_MIN_WIDTH = 1024;
@@ -129,6 +130,10 @@ export default function ProtectedLayout({ allowedRoles, navTitle, navSubtitle })
           <Outlet />
         </main>
       </div>
+
+      {/* Due-today reminders for the signed-in user — checked on every portal
+          load (mounted once here, shared by student/employee/admin). */}
+      <ReminderPopup />
     </div>
   );
 }

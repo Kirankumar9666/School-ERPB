@@ -1,15 +1,21 @@
 import { useEffect, useState } from 'react';
 import { Plus, Trash, Upload, FileSpreadsheet, Award, Users, ClipboardList } from 'lucide-react';
 import Modal from '../../components/Modal';
+import ClassSelect from '../../components/ClassSelect';
 import api from '../../services/api';
+import { loadOptions } from '../../services/options';
+import { classChoices } from '../../utils/classes';
 import toast from 'react-hot-toast';
 
 /**
  * Bulk-upload columns — long/tidy format (one row per student per subject).
  * Must match the backend's MARKS_BULK_COLUMNS exactly (header row required).
+ * Class/Section are deliberately absent: the class is chosen once with the
+ * page's Select Class dropdown and posted with the file, so the spreadsheet
+ * can never contradict the page (or target another class).
  */
 const BULK_COLUMNS = [
-  'RollNumber', 'StudentName', 'Class', 'Section', 'ExamName', 'ExamDate',
+  'RollNumber', 'StudentName', 'ExamName', 'ExamDate',
   'Subject', 'MaxMarks', 'ObtainedMarks',
 ];
 
@@ -36,6 +42,8 @@ const errorLines = (errors) =>
  */
 export default function AdminMarks() {
   const [students, setStudents] = useState([]);
+  const [classes, setClasses] = useState([]); // live class list (options API)
+  const [classKey, setClassKey] = useState('');
   const [marks, setMarks] = useState({});
   const [loading, setLoading] = useState(true);
   const [studentId, setStudentId] = useState('');
@@ -50,17 +58,43 @@ export default function AdminMarks() {
   const [bulkErrors, setBulkErrors] = useState([]);
   const [downloading, setDownloading] = useState(false);
 
-  const loadStudents = () =>
-    api.get('/admin/students').then((r) => {
-      setStudents(r.data.data);
-      setStudentId((current) => current || r.data.data[0]?.id || '');
-    });
+  const loadStudents = () => api.get('/admin/students').then((r) => setStudents(r.data.data));
 
   const loadMarks = () => api.get('/admin/marks').then((r) => setMarks(r.data.data || {}));
 
   useEffect(() => {
-    Promise.all([loadStudents(), loadMarks()]).finally(() => setLoading(false));
+    Promise.all([
+      loadStudents(),
+      loadMarks(),
+      // Same shared class list the Timetable/Syllabus/Attendance/Documents
+      // pages use — never a local copy.
+      loadOptions().then((o) => setClasses(o.classes)),
+    ]).finally(() => setLoading(false));
   }, []);
+
+  /** A student row's class id ('cls-10A') — /admin/students ships grade + section */
+  const classIdOfStudent = (s) => `cls-${s.class}${s.section}`;
+
+  // Class options for the shared ClassSelect: the real classes from
+  // GET /school/options, unioned with any class referenced by the student data
+  // so nothing that exists is hidden (same pattern as the other pages).
+  const choices = classChoices(students.map(classIdOfStudent), classes);
+
+  // Only the selected class's students — the stat cards, the entry form and
+  // bulk upload are all scoped to this class.
+  const classStudents = classKey ? students.filter((s) => classIdOfStudent(s) === classKey) : [];
+  const activeLabel = choices.find((c) => c.id === classKey)?.label || '';
+
+  // Keep the selected student inside the chosen class: switching classes
+  // clears a now-out-of-class selection and pre-selects the class's first
+  // student, so "Upload Marks" can never post for a student of another class.
+  useEffect(() => {
+    setStudentId((current) => {
+      if (classStudents.some((s) => s.id === current)) return current;
+      return classStudents[0]?.id || '';
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classKey, students]);
 
   const setRow = (i, key) => (e) => {
     const next = [...rows];
@@ -128,6 +162,9 @@ export default function AdminMarks() {
     try {
       const fd = new FormData();
       fd.append('file', file);
+      // The class comes from the page's Select Class dropdown — never from the
+      // file (the template has no Class/Section columns).
+      fd.append('classId', classKey);
       const res = await api.post('/admin/marks/bulk', fd);
       toast.success(res.data.message || 'Marks saved.');
       setBulkOpen(false);
@@ -146,8 +183,9 @@ export default function AdminMarks() {
 
   /* ---- Everything below is derived from the marks actually stored, never hardcoded ---- */
 
-  /** Per-student totals across every exam/subject row they have saved */
-  const studentStats = students
+  /** Per-student totals across every exam/subject row they have saved —
+   * computed for the selected class only, never school-wide */
+  const studentStats = classStudents
     .map((s) => {
       const exams = marks[s.id] || [];
       let obtained = 0;
@@ -170,6 +208,7 @@ export default function AdminMarks() {
     : null;
   const topRow = scored.length ? scored.reduce((best, row) => (row.percent > best.percent ? row : best)) : null;
   const readyRows = rows.filter((r) => r.subject.trim() && r.maxMarks);
+  const statsReady = Boolean(classKey);
 
   const pct = (value) => (value === null || value === undefined ? '—' : `${value.toFixed(1)}%`);
 
@@ -178,31 +217,50 @@ export default function AdminMarks() {
       <div className="page-header">
         <div className="page-title">Marks Entry</div>
         <div className="page-subtitle">
+          {statsReady ? activeLabel : 'Select a class to begin'} ·{' '}
           {totalEntities} saved mark row{totalEntities === 1 ? '' : 's'} · {examCount}{' '}
           exam{examCount === 1 ? '' : 's'} · {studentStats.length} student{studentStats.length === 1 ? '' : 's'} with results
         </div>
       </div>
 
+      {/* Same shared class selector as Timetable / Syllabus / Attendance / Documents */}
+      <ClassSelect
+        id="marks-class"
+        value={classKey}
+        onChange={setClassKey}
+        choices={choices}
+        placeholder="Choose a class…"
+        style={{ maxWidth: 280, marginBottom: 'var(--sp-lg)' }}
+      />
+
+      {!statsReady && (
+        <div className="card" style={{ marginBottom: 'var(--sp-lg)' }}>
+          <div className="text-muted">
+            Choose a class above — the stats below, the entry form and Bulk Upload all work on the selected class only.
+          </div>
+        </div>
+      )}
+
       {/* Derived live from the marks in the database — nothing here is hardcoded */}
       <div className="stat-grid" style={{ marginBottom: 'var(--sp-xl)' }}>
         <div className="stat-card">
           <div className="stat-icon stat-icon-primary"><ClipboardList size={22} /></div>
-          <div><div className="stat-value">{totalEntities}</div><div className="stat-label">Mark Rows Saved</div></div>
+          <div><div className="stat-value">{statsReady ? totalEntities : '—'}</div><div className="stat-label">Mark Rows Saved</div></div>
         </div>
         <div className="stat-card">
           <div className="stat-icon stat-icon-info"><FileSpreadsheet size={22} /></div>
-          <div><div className="stat-value">{averagePercent === null ? '—' : pct(averagePercent)}</div><div className="stat-label">Average Score</div></div>
+          <div><div className="stat-value">{statsReady && averagePercent !== null ? pct(averagePercent) : '—'}</div><div className="stat-label">Average Score</div></div>
         </div>
         <div className="stat-card">
           <div className="stat-icon stat-icon-success"><Award size={22} /></div>
           <div>
-            <div className="stat-value">{topRow ? pct(topRow.percent) : '—'}</div>
-            <div className="stat-label">{topRow ? `Top — ${topRow.student.name}` : 'Top Score'}</div>
+            <div className="stat-value">{statsReady && topRow ? pct(topRow.percent) : '—'}</div>
+            <div className="stat-label">{statsReady && topRow ? `Top — ${topRow.student.name}` : 'Top Score'}</div>
           </div>
         </div>
         <div className="stat-card">
           <div className="stat-icon stat-icon-warning"><Users size={22} /></div>
-          <div><div className="stat-value">{studentStats.length}</div><div className="stat-label">Students Assessed</div></div>
+          <div><div className="stat-value">{statsReady ? studentStats.length : '—'}</div><div className="stat-label">Students Assessed</div></div>
         </div>
       </div>
       <div className="section">
@@ -212,12 +270,21 @@ export default function AdminMarks() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--sp-md)' }}>
               <div className="form-group">
                 <label className="form-label">Student *</label>
-                <select className="form-input" value={studentId} onChange={(e) => setStudentId(e.target.value)}>
-                  {students.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} — Class {s.class}-{s.section}{s.rollNumber ? ` (${s.rollNumber})` : ''}
-                    </option>
-                  ))}
+                <select
+                  className="form-input"
+                  value={studentId}
+                  onChange={(e) => setStudentId(e.target.value)}
+                  disabled={!statsReady}
+                >
+                  {!statsReady ? (
+                    <option value="">Select a class first…</option>
+                  ) : (
+                    classStudents.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}{s.rollNumber ? ` (${s.rollNumber})` : ''}
+                      </option>
+                    ))
+                  )}
                 </select>
               </div>
               <div className="form-group">
@@ -227,11 +294,12 @@ export default function AdminMarks() {
                   value={examName}
                   onChange={(e) => setExamName(e.target.value)}
                   placeholder="e.g. Unit Test 2"
+                  disabled={!statsReady}
                 />
               </div>
               <div className="form-group">
                 <label className="form-label">Exam Date</label>
-                <input type="date" className="form-input" value={date} onChange={(e) => setDate(e.target.value)} />
+                <input type="date" className="form-input" value={date} onChange={(e) => setDate(e.target.value)} disabled={!statsReady} />
               </div>
             </div>
 
@@ -250,18 +318,21 @@ export default function AdminMarks() {
                           onChange={setRow(i, 'subject')}
                           placeholder="Any subject name"
                           aria-label={`Subject for row ${i + 1}`}
+                          disabled={!statsReady}
                         />
                       </td>
                       <td>
                         <input
                           className="form-input" type="number" min="1" value={r.maxMarks}
                           onChange={setRow(i, 'maxMarks')} aria-label={`Max marks for row ${i + 1}`}
+                          disabled={!statsReady}
                         />
                       </td>
                       <td>
                         <input
                           className="form-input" type="number" min="0" value={r.obtained}
                           onChange={setRow(i, 'obtained')} aria-label={`Obtained marks for row ${i + 1}`}
+                          disabled={!statsReady}
                         />
                       </td>
                       <td>
@@ -269,7 +340,7 @@ export default function AdminMarks() {
                           type="button"
                           className="btn btn-danger btn-sm"
                           onClick={() => removeRow(i)}
-                          disabled={rows.length === 1}
+                          disabled={rows.length === 1 || !statsReady}
                           aria-label="Remove row"
                         >
                           <Trash size={14} />
@@ -283,16 +354,18 @@ export default function AdminMarks() {
 {error && <div className="login-error">{error}</div>}
 
             <div style={{ display: 'flex', gap: 'var(--sp-md)', alignItems: 'center', flexWrap: 'wrap' }}>
-              <button type="button" className="btn btn-secondary" onClick={addRow}>
+              <button type="button" className="btn btn-secondary" onClick={addRow} disabled={!statsReady}>
                 <Plus size={16} /> Add Subject
               </button>
-              <button type="submit" className="btn btn-primary" disabled={saving}>
+              <button type="submit" className="btn btn-primary" disabled={saving || !statsReady}>
                 <Upload size={16} /> {saving ? 'Uploading...' : 'Upload Marks'}
               </button>
               <button
                 type="button"
                 className="btn btn-secondary"
                 onClick={() => { setBulkErrors([]); setBulkOpen(true); }}
+                disabled={!statsReady}
+                title={statsReady ? `Bulk upload marks for ${activeLabel}` : 'Select a class first'}
               >
                 <FileSpreadsheet size={16} /> Bulk Upload
               </button>
@@ -341,7 +414,7 @@ export default function AdminMarks() {
       </div>
 {bulkOpen && (
         <Modal
-          title="Bulk Upload Marks"
+          title={activeLabel ? `Bulk Upload Marks — ${activeLabel}` : 'Bulk Upload Marks'}
           onClose={() => setBulkOpen(false)}
           footer={
             <button className="btn btn-secondary" onClick={() => setBulkOpen(false)}>Close</button>
@@ -354,6 +427,12 @@ export default function AdminMarks() {
               </ul>
             </div>
           )}
+
+          <div className="text-sm" style={{ marginBottom: 'var(--sp-md)' }}>
+            Bulk upload marks for <b>{activeLabel || 'the selected class'}</b> — every row must
+            belong to a student of this class. Rows for students of any other class are rejected,
+            and nothing is saved.
+          </div>
 
           <div className="form-group">
             <label className="form-label">Upload a spreadsheet (.csv or .xlsx)</label>
@@ -383,10 +462,11 @@ export default function AdminMarks() {
 
           <div className="text-sm text-muted" style={{ marginTop: 'var(--sp-sm)' }}>
             Header row required, in this order: {BULK_COLUMNS.join(', ')}.<br />
-            One row per student per subject — students are matched by RollNumber (never by name).
-            Subject is free text, so any admin-defined subject is accepted. Up to 200 rows per file,
-            saved atomically: if any row is invalid, nothing is saved and the failing rows and columns
-            are listed here.
+            One row per student per subject — students are matched by RollNumber (never by name),
+            and only within {activeLabel || 'the selected class'}. The class is not part of the
+            file: it comes from the Select Class dropdown on this page. Subject is free text, so
+            any admin-defined subject is accepted. Up to 200 rows per file, saved atomically: if
+            any row is invalid, nothing is saved and the failing rows and columns are listed here.
           </div>
         </Modal>
       )}

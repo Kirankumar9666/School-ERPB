@@ -107,7 +107,11 @@ router.post('/refresh', refreshLimiter, async (req, res) => {
  */
 const resetPasswordSchema = z.object({
   userId: z.string().min(1),
-  newPassword: z.string().min(8, 'Password must be at least 8 characters'),
+  newPassword: z.string()
+    .min(8, 'Password must be at least 8 characters')
+    .regex(/[a-z]/, 'Password must include a lowercase letter')
+    .regex(/[A-Z]/, 'Password must include an uppercase letter')
+    .regex(/[0-9]/, 'Password must include a digit'),
 });
 
 router.post('/reset-password', authMiddleware, requireRole([ROLES.ADMIN]), async (req, res) => {

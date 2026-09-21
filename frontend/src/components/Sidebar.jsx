@@ -91,6 +91,7 @@ NAV_CONFIG[ROLES.ADMIN] = {
       items: [
         { to: '/admin/announcements',icon: <Bell size={16} />,            label: 'Announcements' },
         { to: '/admin/holidays',     icon: <PartyPopper size={16} />,     label: 'Holidays' },
+        { to: '/admin/calendar',     icon: <CalendarDays size={16} />,    label: 'Calendar' },
         { to: '/admin/leaves',       icon: <Umbrella size={16} />,        label: 'Leave Approval' },
       ],
     },

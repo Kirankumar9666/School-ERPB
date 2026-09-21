@@ -63,7 +63,7 @@ export default function StudentMarks() {
             <div key={exam.examId} className="card progress-card">
               <div className="progress-card-header">
                 <div>
-                  <div className="school-badge">🏫 School Progress Card</div>
+                  <div className="school-badge school-badge--label">🏫 School Progress Card</div>
                   <div style={{ marginTop: 8, fontSize: 16, fontWeight: 700 }}>{exam.examName}</div>
                   <div className="text-sm text-muted">Conducted on {exam.date}</div>
                 </div>

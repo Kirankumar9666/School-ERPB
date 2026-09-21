@@ -44,6 +44,9 @@ app.use(cors({
     callback(null, !origin || config.cors.allowedOrigins.includes(origin));
   },
   credentials: true,
+  // The payslip download names the file from Content-Disposition — the
+  // browser can only read that header cross-origin when it is exposed.
+  exposedHeaders: ['Content-Disposition'],
 }));
 
 // ─── General Middleware ────────────────────────────────────────────────────

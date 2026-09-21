@@ -4,25 +4,7 @@ import Modal from '../../components/Modal';
 import api from '../../services/api';
 import toast from 'react-hot-toast';
 import { downloadTextFile } from '../../utils/download';
-
-const formatINR = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
-
-/**
- * Salary components — grouped exactly like the employee portal renders them
- * (earnings vs deductions); the labels are display strings, the keys are the
- * PayrollRecord columns the API accepts.
- */
-const EARNINGS = [
-  { key: 'basicPay', label: 'Basic Pay', required: true },
-  { key: 'hra', label: 'HRA' },
-  { key: 'transportAllowance', label: 'Transport Allowance' },
-  { key: 'medicalAllowance', label: 'Medical Allowance' },
-];
-const DEDUCTIONS = [
-  { key: 'providentFund', label: 'Provident Fund (PF)' },
-  { key: 'professionalTax', label: 'Professional Tax' },
-  { key: 'tds', label: 'TDS' },
-];
+import { SALARY_EARNINGS, SALARY_DEDUCTIONS, formatINR } from '../../constants/payroll';
 const STATUS_BADGE = { paid: 'badge-active', pending: 'badge-pending' };
 
 /** Mapped payroll record → flat edit form (defaults from the record, or zeros) */
@@ -114,10 +96,12 @@ export default function AdminPayroll() {
   };
 
   /** Start editing `record`; for a brand-new month prefill from the latest
-      existing month so the admin edits from current reality, not zeros. */
+      existing month so the admin edits from current reality, not zeros — or,
+      for an employee with no payroll history yet, from the default salary
+      structure saved on their employee record. */
   const openEdit = (e, record) => {
     setMonth(record?.month || e.payroll.at(-1)?.month || currentMonth());
-    setForm(formFrom(record || e.payroll.at(-1)));
+    setForm(formFrom(record || e.payroll.at(-1) || e.defaultSalary));
     setError('');
     setView('edit');
   };
@@ -340,7 +324,7 @@ export default function AdminPayroll() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-lg)', marginTop: 'var(--sp-md)' }}>
                 <div>
                   <div className="section-title" style={{ fontSize: 13 }}>Earnings (₹)</div>
-                  {EARNINGS.map(({ key, label, required }) => (
+                  {SALARY_EARNINGS.map(({ key, label, required }) => (
                     <div className="form-group" key={key}>
                       <label className="form-label" htmlFor={`payroll-${key}`}>{label}{required ? ' *' : ''}</label>
                       <input
@@ -357,7 +341,7 @@ export default function AdminPayroll() {
                 </div>
                 <div>
                   <div className="section-title" style={{ fontSize: 13 }}>Deductions (₹)</div>
-                  {DEDUCTIONS.map(({ key, label }) => (
+                  {SALARY_DEDUCTIONS.map(({ key, label }) => (
                     <div className="form-group" key={key}>
                       <label className="form-label" htmlFor={`payroll-${key}`}>{label}</label>
                       <input

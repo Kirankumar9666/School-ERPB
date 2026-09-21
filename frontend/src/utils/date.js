@@ -27,18 +27,30 @@ export const toISODate = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${
 /** Today's ISO date */
 export const todayISO = () => toISODate(new Date());
 
-/** Build a 42-cell calendar array for the given month. Cells: { day, iso, inMonth } or null */
+/**
+ * Build a month grid for the given year/month: exactly one cell per grid
+ * position, in column order. The number of leading blank cells is the REAL
+ * weekday of the 1st — `new Date(year, month - 1, 1).getDay()` (0 = Sunday) —
+ * never a hardcoded or manually counted offset, and the day count comes from
+ * `new Date(year, month, 0).getDate()`, so the layout is correct for every
+ * month/year, including Dec → January navigation.
+ *
+ * Every cell — leading/trailing blanks included — is the same object shape
+ * ({ day, iso, inMonth }), so a consumer that maps over the array can never
+ * accidentally drop a blank cell (dropping one shifts every following day
+ * into the wrong weekday column). Total length is always a multiple of 7.
+ */
 export const buildCalendar = (year, month) => {
-  const first = new Date(year, month - 1, 1);
-  const startWeekday = first.getDay(); // 0 = Sunday
+  const startWeekday = new Date(year, month - 1, 1).getDay(); // 0 = Sunday
   const daysInMonth = new Date(year, month, 0).getDate();
+  const blank = () => ({ day: null, iso: null, inMonth: false });
 
   const cells = [];
-  for (let i = 0; i < startWeekday; i += 1) cells.push(null);
+  for (let i = 0; i < startWeekday; i += 1) cells.push(blank());
   for (let day = 1; day <= daysInMonth; day += 1) {
     cells.push({ day, iso: `${year}-${pad2(month)}-${pad2(day)}`, inMonth: true });
   }
-  while (cells.length % 7 !== 0) cells.push({ day: null, iso: null, inMonth: false });
+  while (cells.length % 7 !== 0) cells.push(blank());
   return cells;
 };
 

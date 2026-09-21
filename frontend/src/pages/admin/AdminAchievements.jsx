@@ -3,6 +3,7 @@ import { Trophy, Plus, Trash } from 'lucide-react';
 import api from '../../services/api';
 import { loadOptions, optionLabel } from '../../services/options';
 import toast from 'react-hot-toast';
+import ConfirmModal from '../../components/ConfirmModal';
 
 /**
  * Admin Achievements — record and manage student achievements.
@@ -58,15 +59,24 @@ export default function AdminAchievements() {
     }
   };
 
-  const handleDelete = async (ach) => {
-    if (!window.confirm(`Delete achievement "${ach.title}"? This cannot be undone.`)) return;
-    try {
-      await api.delete(`/admin/achievements/${ach.id}`);
-      toast.success('Achievement deleted.');
-      await load();
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Could not delete achievement.');
-    }
+  // Destructive-action confirmation (ConfirmModal replaces window.confirm)
+  const [confirm, setConfirm] = useState(null);
+
+  const handleDelete = (ach) => {
+    setConfirm({
+      title: 'Delete Achievement',
+      message: `Delete achievement “${ach.title}”? This cannot be undone.`,
+      onConfirm: async () => {
+        try {
+          await api.delete(`/admin/achievements/${ach.id}`);
+          toast.success('Achievement deleted.');
+          await load();
+        } catch (err) {
+          toast.error(err.response?.data?.message || 'Could not delete achievement.');
+        }
+        setConfirm(null);
+      },
+    });
   };
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
@@ -82,7 +92,7 @@ export default function AdminAchievements() {
         <div className="section-title"><Plus size={14} /> Add Achievement</div>
         <div className="card">
           <form onSubmit={handleAdd} style={{ display: 'grid', gap: 'var(--sp-md)' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-md)' }}>
+            <div className="form-grid-2">
               <div className="form-group">
                 <label className="form-label">Student *</label>
                 <select className="form-input" value={form.studentId} onChange={(e) => setForm({ ...form, studentId: e.target.value })}>
@@ -157,6 +167,19 @@ export default function AdminAchievements() {
           </div>
         )}
       </div>
+
+      {confirm && (
+        <ConfirmModal
+          title={confirm.title}
+          confirmLabel="Delete"
+          cancelLabel="Cancel"
+          tone="danger"
+          onClose={() => setConfirm(null)}
+          onConfirm={confirm.onConfirm}
+        >
+          <p>{confirm.message}</p>
+        </ConfirmModal>
+      )}
     </div>
   );
 }

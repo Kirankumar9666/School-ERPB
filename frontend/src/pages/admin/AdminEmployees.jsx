@@ -1,16 +1,21 @@
 import { useEffect, useState } from 'react';
-import { User, Plus, Pencil, Trash } from 'lucide-react';
+import { User, Plus, Pencil, Trash, KeyRound } from 'lucide-react';
 import Modal from '../../components/Modal';
+import ResetPasswordModal from '../../components/ResetPasswordModal';
+import ConfirmModal from '../../components/ConfirmModal';
 import api from '../../services/api';
 import { loadOptions } from '../../services/options';
 import { EMPLOYEE_ROLES } from '../../constants/roles';
 import toast from 'react-hot-toast';
 import employeeForm from './employeeForm';
+import { contactToField, fieldToContact, isValidContact } from '../../utils/phone';
+import { SALARY_EARNINGS, SALARY_DEDUCTIONS } from '../../constants/payroll';
 
 /**
  * Blank employee form. Every default is the first option the server offers for
  * that field (Prisma enums via /school/options, EMPLOYEE_ROLES for the job
- * role), so no default is a literal written here.
+ * role), so no default is a literal written here. Salary components default to
+ * 0 — a new employee has no salary structure until the admin enters one.
  * @param {object} enums option lists from GET /school/options
  */
 const blankForm = (enums = {}) => ({
@@ -23,6 +28,8 @@ const blankForm = (enums = {}) => ({
   experience: '', dob: '', bloodGroup: '', emergencyContact: '',
   status: enums.accountStatuses?.[0] || '',
   address: '',
+  basicPay: 0, hra: 0, transportAllowance: 0, medicalAllowance: 0,
+  providentFund: 0, professionalTax: 0, tds: 0,
 });
 
 /**
@@ -40,6 +47,9 @@ export default function AdminEmployees() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [q, setQ] = useState('');
+  // Reset-password modal: the user account of the employee being reset.
+  // Null when the employee has no account (the button only renders when userId exists).
+  const [resettingUser, setResettingUser] = useState(null);
 
   /**
    * Live search over the staff list. `GET /admin/employees` already returns
@@ -75,23 +85,35 @@ export default function AdminEmployees() {
       name: e.name, employeeId: e.employeeId || '', gender: e.gender || blank.gender,
       department: e.department || '', designation: e.designation || '', role: e.role || blank.role,
       employmentType: e.employmentType || blank.employmentType, dateOfJoining: e.dateOfJoining || '',
-      mobile: e.mobile || '', email: e.email || '', qualification: e.qualification || '',
+      mobile: contactToField(e.mobile), email: e.email || '', qualification: e.qualification || '',
       experience: e.experience || '', dob: e.dob || '', bloodGroup: e.bloodGroup || '',
-      emergencyContact: e.emergencyContact || '', status: e.status || blank.status, address: e.address || '',
+      emergencyContact: contactToField(e.emergencyContact), status: e.status || blank.status, address: e.address || '',
+      basicPay: e.basicPay ?? 0, hra: e.hra ?? 0, transportAllowance: e.transportAllowance ?? 0,
+      medicalAllowance: e.medicalAllowance ?? 0, providentFund: e.providentFund ?? 0,
+      professionalTax: e.professionalTax ?? 0, tds: e.tds ?? 0,
     });
     setError('');
     setModal({ mode: 'edit', employee: e });
   };
 
-  const handleDelete = async (e) => {
-    if (!window.confirm(`Delete employee "${e.name}"? This cannot be undone.`)) return;
-    try {
-      await api.delete(`/admin/employees/${e.id}`);
-      toast.success('Employee deleted.');
-      await load();
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Delete failed.');
-    }
+  // Destructive-action confirmation (ConfirmModal replaces window.confirm)
+  const [confirm, setConfirm] = useState(null);
+
+  const handleDelete = (e) => {
+    setConfirm({
+      title: 'Delete Employee',
+      message: `Delete employee “${e.name}”? This cannot be undone.`,
+      onConfirm: async () => {
+        try {
+          await api.delete(`/admin/employees/${e.id}`);
+          toast.success('Employee deleted.');
+          await load();
+        } catch (err) {
+          toast.error(err.response?.data?.message || 'Delete failed.');
+        }
+        setConfirm(null);
+      },
+    });
   };
 
   const handleSave = async () => {
@@ -100,15 +122,35 @@ export default function AdminEmployees() {
       setError('Name, Department and Designation are required.');
       return;
     }
+    if (!isValidContact(form.mobile) || !isValidContact(form.emergencyContact)) {
+      setError('Enter a valid 10-digit contact number.');
+      return;
+    }
+    // Same rule the payroll month editor enforces server-side: deductions can
+    // never exceed total earnings in the default salary structure either.
+    const amount = (v) => Number(v) || 0;
+    const earnings = SALARY_EARNINGS.reduce((n, c) => n + amount(form[c.key]), 0);
+    const deductions = SALARY_DEDUCTIONS.reduce((n, c) => n + amount(form[c.key]), 0);
+    if (earnings - deductions < 0) {
+      setError('Deductions cannot exceed total earnings.');
+      return;
+    }
+    const whole = (v) => Math.max(0, Math.trunc(amount(v)));
     const payload = {
       name: form.name.trim(), employeeId: form.employeeId.trim() || undefined,
       gender: form.gender, department: form.department.trim(), designation: form.designation.trim(),
       role: form.role, employmentType: form.employmentType,
-      dateOfJoining: form.dateOfJoining || undefined, mobile: form.mobile.trim() || undefined,
+      dateOfJoining: form.dateOfJoining || undefined, mobile: fieldToContact(form.mobile) || undefined,
       email: form.email.trim() || undefined, qualification: form.qualification.trim() || undefined,
       experience: form.experience.trim() || undefined, dob: form.dob || undefined,
-      bloodGroup: form.bloodGroup.trim() || undefined, emergencyContact: form.emergencyContact.trim() || undefined,
+      bloodGroup: form.bloodGroup.trim() || undefined, emergencyContact: fieldToContact(form.emergencyContact) || undefined,
       status: form.status, address: form.address.trim() || undefined,
+      // Default salary structure — whole, non-negative rupees (the server
+      // validates and stores these on the employee record).
+      basicPay: whole(form.basicPay), hra: whole(form.hra),
+      transportAllowance: whole(form.transportAllowance), medicalAllowance: whole(form.medicalAllowance),
+      providentFund: whole(form.providentFund), professionalTax: whole(form.professionalTax),
+      tds: whole(form.tds),
     };
     setSaving(true);
     try {
@@ -188,6 +230,15 @@ export default function AdminEmployees() {
                       <button className="btn btn-secondary btn-sm" onClick={() => openEdit(e)} aria-label="Edit employee">
                         <Pencil size={14} />
                       </button>
+                      {e.userId && (
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setResettingUser({ id: e.userId, name: e.name })}
+                          aria-label={`Reset password for ${e.name}`}
+                        >
+                          <KeyRound size={14} />
+                        </button>
+                      )}
                       <button className="btn btn-danger btn-sm" onClick={() => handleDelete(e)} aria-label="Delete employee">
                         <Trash size={14} />
                       </button>
@@ -216,6 +267,26 @@ export default function AdminEmployees() {
           {error && <div className="login-error" style={{ marginBottom: 'var(--sp-md)' }}>{error}</div>}
           {employeeForm(form, setForm, options)}
         </Modal>
+      )}
+
+      {resettingUser && (
+        <ResetPasswordModal
+          user={resettingUser}
+          onClose={() => setResettingUser(null)}
+        />
+      )}
+
+      {confirm && (
+        <ConfirmModal
+          title={confirm.title}
+          confirmLabel="Delete"
+          cancelLabel="Cancel"
+          tone="danger"
+          onClose={() => setConfirm(null)}
+          onConfirm={confirm.onConfirm}
+        >
+          <p>{confirm.message}</p>
+        </ConfirmModal>
       )}
     </div>
   );

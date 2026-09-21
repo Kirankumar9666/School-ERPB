@@ -48,10 +48,6 @@ export default function AdminDashboard() {
           <div className="stat-icon stat-icon-success"><PartyPopper size={22} /></div>
           <div><div className="stat-value">{summary?.totalHolidays ?? '—'}</div><div className="stat-label">Holidays</div></div>
         </div>
-        <div className="stat-card">
-          <div className="stat-icon stat-icon-danger"><Umbrella size={22} /></div>
-          <div><div className="stat-value">{summary?.pendingLeaves ?? '—'}</div><div className="stat-label">Pending Leaves</div></div>
-        </div>
       </div>
 
       {/* Quick management */}

@@ -9,6 +9,17 @@ let ctx;
 let admin;
 let student;
 
+/**
+ * 'YYYY-MM-DD' `days` days from now, in the school timezone (Asia/Kolkata) —
+ * the same clock the server's announcement window filter reads, so tests
+ * straddling midnight UTC still agree with the server.
+ */
+const istDay = (days) => {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + days);
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(d);
+};
+
 test('setup — boot API and log in', async () => {
   ctx = await startServer();
   admin = await login(ctx.base, 'admin', 'Admin@123');
@@ -156,12 +167,103 @@ test('announcements: create + verify via school endpoint', async () => {
   const created = await request(ctx.base, '/admin/announcements', {
     method: 'POST',
     token: admin.accessToken,
-    body: { title: 'Test Announcement', body: 'This is a test announcement body.', targetRoles: ['student'], category: 'event' },
+    body: {
+      title: 'Test Announcement', body: 'This is a test announcement body.',
+      targetRoles: ['student'], category: 'event', showUntil: '2027-01-31',
+    },
   });
   assert.equal(created.status, 201);
+  // "Show from" left blank → the server defaults it to the real current date.
+  assert.equal(created.body.data.showFrom, istDay(0), 'blank Show from defaults to today');
+  assert.equal(created.body.data.showUntil, '2027-01-31');
 
   const studentAnn = await request(ctx.base, '/school/announcements', { token: student.accessToken });
   assert.ok(studentAnn.body.data.some((a) => a.title === 'Test Announcement'), 'student sees the new announcement');
+
+  const del = await request(ctx.base, `/admin/announcements/${created.body.data.id}`, { method: 'DELETE', token: admin.accessToken });
+  assert.equal(del.status, 200);
+});
+
+test('announcements: scheduling fields are validated', async () => {
+  // showUntil is required — without it the circular would stay visible forever.
+  const noUntil = await request(ctx.base, '/admin/announcements', {
+    method: 'POST',
+    token: admin.accessToken,
+    body: { title: 'No Until', body: 'This body is long enough to pass.', targetRoles: ['student'], category: 'event' },
+  });
+  assert.equal(noUntil.status, 400);
+  assert.ok(noUntil.body.errors?.showUntil, 'missing showUntil is rejected');
+
+  // A window that ends before it starts is nonsensical.
+  const reversed = await request(ctx.base, '/admin/announcements', {
+    method: 'POST',
+    token: admin.accessToken,
+    body: {
+      title: 'Reversed Window', body: 'This body is long enough to pass.',
+      targetRoles: ['student'], category: 'event', showFrom: '2026-12-10', showUntil: '2026-12-01',
+    },
+  });
+  assert.equal(reversed.status, 400);
+  assert.ok(reversed.body.errors?.showUntil, 'showUntil < showFrom is rejected');
+
+  // Dates must be real YYYY-MM-DD values.
+  const malformed = await request(ctx.base, '/admin/announcements', {
+    method: 'POST',
+    token: admin.accessToken,
+    body: {
+      title: 'Bad Date', body: 'This body is long enough to pass.',
+      targetRoles: ['student'], category: 'event', showUntil: '31/12/2026',
+    },
+  });
+  assert.equal(malformed.status, 400);
+  assert.ok(malformed.body.errors?.showUntil, 'non-ISO date rejected');
+});
+
+test('announcements: visibility window auto-shows/hides circulars on the portals', async () => {
+  const base = { body: 'This body is long enough to pass.', targetRoles: ['student'], category: 'event' };
+
+  // Scheduled for the future → must NOT appear yet (e.g. a holiday notice
+  // posted now that only shows starting next week).
+  const future = await request(ctx.base, '/admin/announcements', {
+    method: 'POST', token: admin.accessToken,
+    body: { title: 'Scheduled Notice', ...base, showFrom: istDay(10), showUntil: istDay(40) },
+  });
+  assert.equal(future.status, 201);
+
+  // Already expired → must NOT appear anymore, with no manual hiding.
+  const expired = await request(ctx.base, '/admin/announcements', {
+    method: 'POST', token: admin.accessToken,
+    body: { title: 'Expired Notice', ...base, showFrom: istDay(-40), showUntil: istDay(-10) },
+  });
+  assert.equal(expired.status, 201);
+
+  const before = await request(ctx.base, '/school/announcements', { token: student.accessToken });
+  assert.ok(!before.body.data.some((a) => a.title === 'Scheduled Notice'), 'future showFrom is hidden');
+  assert.ok(!before.body.data.some((a) => a.title === 'Expired Notice'), 'past showUntil is hidden');
+
+  // Extend/shift the scheduled window via PUT so it covers today → appears.
+  const extended = await request(ctx.base, `/admin/announcements/${future.body.data.id}`, {
+    method: 'PUT',
+    token: admin.accessToken,
+    body: {
+      title: 'Scheduled Notice', ...base,
+      showFrom: istDay(-1), showUntil: istDay(30),
+    },
+  });
+  assert.equal(extended.status, 200);
+  assert.equal(extended.body.data.showUntil, istDay(30));
+
+  const after = await request(ctx.base, '/school/announcements', { token: student.accessToken });
+  assert.ok(after.body.data.some((a) => a.title === 'Scheduled Notice'), 'extended window makes it visible');
+  assert.ok(!after.body.data.some((a) => a.title === 'Expired Notice'), 'expired one stays hidden');
+
+  // Newest first: the just-extended circular (showFrom yesterday) sorts above
+  // everything seeded with an older showFrom.
+  const titles = after.body.data.map((a) => a.title);
+  assert.equal(titles[0], 'Scheduled Notice', 'visible circulars sort by showFrom descending');
+
+  await request(ctx.base, `/admin/announcements/${future.body.data.id}`, { method: 'DELETE', token: admin.accessToken });
+  await request(ctx.base, `/admin/announcements/${expired.body.data.id}`, { method: 'DELETE', token: admin.accessToken });
 });
 
 test('holidays: create + list + delete round-trip', async () => {
@@ -235,6 +337,75 @@ test('users list never exposes passwordHash', async () => {
   assert.equal(res.status, 200);
   assert.ok(!JSON.stringify(res.body).includes('passwordHash'));
   assert.ok(res.body.data.length >= 4);
+});
+test('users list exposes linkedEntityId so an account can be matched to its student/employee', async () => {
+  const [users, students, employees] = await Promise.all([
+    request(ctx.base, '/admin/users', { token: admin.accessToken }),
+    request(ctx.base, '/admin/students', { token: admin.accessToken }),
+    request(ctx.base, '/admin/employees', { token: admin.accessToken }),
+  ]);
+  const studentIds = new Set(students.body.data.map((s) => s.id));
+  const employeeIds = new Set(employees.body.data.map((e) => e.id));
+
+  // every account reports the field, and any non-null link resolves to a real record
+  for (const u of users.body.data) {
+    assert.ok('linkedEntityId' in u, `${u.username} exposes linkedEntityId`);
+    if (u.linkedEntityId !== null) {
+      assert.ok(
+        studentIds.has(u.linkedEntityId) || employeeIds.has(u.linkedEntityId),
+        `${u.username} links to a real student/employee (${u.linkedEntityId})`,
+      );
+    }
+  }
+
+  // student and employee accounts carry their record id; the admin carries none
+  // (that is what keeps the admin in the screen's separate "Other Accounts" list)
+  assert.equal(users.body.data.find((u) => u.username === 'student').linkedEntityId, 'stu-001');
+  assert.equal(users.body.data.find((u) => u.username === 'teacher').linkedEntityId, 'emp-001');
+  assert.ok(users.body.data.some((u) => u.linkedEntityId === null), 'an unlinked account exists');
+});
+
+test('password reset (PUT /admin/users/:id/reset-password): admin-only, complexity enforced, new password really logs in', async () => {
+  // The user id of the student account, derived live from the users list
+  const users = await request(ctx.base, '/admin/users', { token: admin.accessToken });
+  const target = users.body.data.find((u) => u.linkedEntityId === 'stu-001');
+  assert.ok(target, 'the student account is listed with its user id');
+
+  // A non-admin can never call it — students have no self-service reset anywhere
+  const denied = await request(ctx.base, `/admin/users/${target.id}/reset-password`, {
+    method: 'PUT', token: student.accessToken, body: { newPassword: 'StudentNew@123' },
+  });
+  assert.equal(denied.status, 403);
+
+  // Complexity rules: too short, and each missing character class rejected
+  const weak = [
+    'Ab@1', // too short
+    'alllowercase1', // no uppercase
+    'ALLUPPERCASE1', // no lowercase
+    'NoDigitsHere', // no digit
+  ];
+  for (const newPassword of weak) {
+    const bad = await request(ctx.base, `/admin/users/${target.id}/reset-password`, {
+      method: 'PUT', token: admin.accessToken, body: { newPassword },
+    });
+    assert.equal(bad.status, 400, `"${newPassword}" must be rejected`);
+    assert.equal(bad.body.code, 'VALIDATION_ERROR');
+  }
+
+  // A strong password succeeds, the old one stops working, and the new one
+  // logs in — proving the hash was really written to the database with bcrypt.
+  const ok = await request(ctx.base, `/admin/users/${target.id}/reset-password`, {
+    method: 'PUT', token: admin.accessToken, body: { newPassword: 'NewPass@123' },
+  });
+  assert.equal(ok.status, 200);
+
+  const oldFails = await request(ctx.base, '/auth/login', {
+    method: 'POST', body: { username: 'student', password: 'Student@123' },
+  });
+  assert.equal(oldFails.status, 401, 'the old password no longer authenticates');
+
+  const relogin = await login(ctx.base, 'student', 'NewPass@123');
+  assert.ok(relogin.accessToken, 'the new password logs the student in');
 });
 
 test('teardown — stop server', async () => { await stopServer(ctx.server); });

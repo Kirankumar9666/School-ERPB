@@ -16,6 +16,16 @@ const toDateStr = (d) => (d ? d.toISOString().slice(0, 10) : null);
 const toIso = (d) => (d ? d.toISOString() : null);
 
 /**
+ * The school's current date as 'YYYY-MM-DD', derived from the REAL clock on
+ * every call — never cached or hardcoded — so the announcement show-window
+ * filter can never go stale. Asia/Kolkata is the school timezone the whole
+ * app runs on (en-IN dates, IST timetable), so "today" is the school's
+ * calendar day, not the server process's UTC day.
+ */
+const schoolToday = () =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date()); // en-CA → YYYY-MM-DD
+
+/**
  * 'YYYY-MM' → { gte: Date, lt: Date } covering that month (UTC bounds).
  * Returns null for malformed months (callers then serve empty records,
  * matching the old mock behaviour for unknown month keys).
@@ -52,6 +62,7 @@ const classIdOf = (cls, section) => `cls-${String(cls).trim()}${String(section).
 const mapStudent = (s) => ({
   id: s.id,
   userId: s.userId,
+  username: s.user?.username ?? null, // login account (only present when included)
   name: s.name,
   photo: s.photo,
   class: s.class ? String(s.class.grade) : null,
@@ -93,6 +104,15 @@ const mapEmployee = (e) => ({
   reportingPrincipal: e.reportingPrincipal,
   employmentType: e.employmentType,
   status: e.status,
+  // Default salary structure (₹) — edited on the employee form, prefilled into
+  // new payroll months. Same flat keys as PayrollRecord.
+  basicPay: e.basicPay,
+  hra: e.hra,
+  transportAllowance: e.transportAllowance,
+  medicalAllowance: e.medicalAllowance,
+  providentFund: e.providentFund,
+  professionalTax: e.professionalTax,
+  tds: e.tds,
   assignedClasses: (e.classesTaught || [])
     .map((a) => ({
       classId: a.classId,
@@ -182,9 +202,28 @@ const mapUserPublic = (u) => ({
   linkedEntityId: u.student?.id || u.employee?.id || null,
 });
 
+/**
+ * SyllabusEntry.topics (Json) → normalized [{ topic, done }] array.
+ * Defensive against legacy shapes: plain strings become { topic, done: false }
+ * (per spec: no per-topic data = nothing done), malformed entries are dropped.
+ */
+const normalizeSyllabusTopics = (topics) => {
+  if (!Array.isArray(topics)) return [];
+  return topics
+    .map((t) => {
+      if (typeof t === 'string') return { topic: t, done: false };
+      if (t && typeof t === 'object' && typeof t.topic === 'string') {
+        return { topic: t.topic, done: t.done === true };
+      }
+      return null;
+    })
+    .filter((t) => t && t.topic.trim().length > 0);
+};
+
 module.exports = {
   toDateStr,
   toIso,
+  schoolToday,
   monthRange,
   monthLabel,
   statusToApi,
@@ -198,4 +237,5 @@ module.exports = {
   mapAchievement,
   buildAttendanceRecords,
   mapUserPublic,
+  normalizeSyllabusTopics,
 };

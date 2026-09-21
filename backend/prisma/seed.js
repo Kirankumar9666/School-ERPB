@@ -14,7 +14,7 @@
  */
 const { PrismaClient } = require('@prisma/client');
 const { MOCK_USERS } = require('../src/mock/users');
-const { MOCK_STUDENTS, MOCK_ATTENDANCE_STUDENT, MOCK_MARKS, MOCK_ACHIEVEMENTS } = require('../src/mock/students');
+const { MOCK_STUDENTS, MOCK_ATTENDANCE_STUDENT, MOCK_MARKS, MOCK_ACHIEVEMENTS, MOCK_STUDENT_DOCUMENTS } = require('../src/mock/students');
 const { MOCK_EMPLOYEES, MOCK_ATTENDANCE_EMPLOYEE, MOCK_LEAVES, MOCK_PAYROLL, MOCK_DOCUMENTS } = require('../src/mock/employees');
 const { MOCK_TIMETABLE, MOCK_HOLIDAYS, MOCK_ANNOUNCEMENTS, MOCK_SYLLABUS } = require('../src/mock/school');
 
@@ -72,8 +72,8 @@ async function seed() {
   for (const model of [
     'auditEntry', 'marksEntry', 'exam', 'studentAttendance', 'employeeAttendance',
     'teachingAssignment', 'leaveRequest', 'leaveBalance', 'payrollRecord',
-    'employeeDocument', 'achievement', 'syllabusEntry', 'timetablePeriod',
-    'announcement', 'holiday', 'student', 'class', 'employee', 'user',
+    'employeeDocument', 'studentDocument', 'achievement', 'syllabusEntry', 'timetablePeriod',
+    'reminder', 'announcement', 'holiday', 'student', 'class', 'employee', 'user',
   ]) {
     await prisma[model].deleteMany();
   }
@@ -194,7 +194,10 @@ async function seed() {
   const syllabus = [];
   Object.entries(MOCK_SYLLABUS).forEach(([classId, list]) => {
     list.forEach((entry) => syllabus.push({
-      classId, subject: entry.subject, topics: entry.topics, completedPercent: entry.completedPercent,
+      classId, subject: entry.subject,
+      // Completion starts at zero for every topic — the old mock percentages are
+      // deliberately NOT carried over (per-topic done state is tracked explicitly).
+      topics: entry.topics.map((t) => ({ topic: t, done: false })),
     }));
   });
   if (syllabus.length) await prisma.syllabusEntry.createMany({ data: syllabus });
@@ -237,12 +240,21 @@ async function seed() {
   });
   if (documents.length) await prisma.employeeDocument.createMany({ data: documents });
 
+  const studentDocs = [];
+  Object.entries(MOCK_STUDENT_DOCUMENTS).forEach(([studentId, list]) => {
+    list.forEach((d) => studentDocs.push({
+      id: d.id, studentId, type: d.type, fileName: d.fileName, uploadedAt: new Date(d.uploadedAt),
+    }));
+  });
+  if (studentDocs.length) await prisma.studentDocument.createMany({ data: studentDocs });
+
   /* ---- announcements / holidays / achievements ---- */
   if (MOCK_ANNOUNCEMENTS.length) {
     await prisma.announcement.createMany({
       data: MOCK_ANNOUNCEMENTS.map((a) => ({
         id: a.id, title: a.title, body: a.body, targetRoles: a.targetRoles,
         category: a.category ?? null, createdAt: new Date(a.createdAt),
+        showFrom: at(a.showFrom), showUntil: at(a.showUntil),
       })),
     });
   }

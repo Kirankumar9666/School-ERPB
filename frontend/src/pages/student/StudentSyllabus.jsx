@@ -4,7 +4,17 @@ import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 
 /**
- * Student Syllabus — per-subject topics with completion progress.
+ * Derived completion: (done topics / total topics) × 100, rounded — computed
+ * from the stored per-topic done flags, never entered or stored as a number.
+ */
+const percentOf = (topics) =>
+  topics.length === 0
+    ? 0
+    : Math.round((topics.filter((t) => t.done).length / topics.length) * 100);
+
+/**
+ * Student Syllabus — per-subject topic chips (green = done, outline = not
+ * done) with a live-derived completion percentage.
  */
 export default function StudentSyllabus() {
   const { user } = useAuth();
@@ -34,25 +44,26 @@ export default function StudentSyllabus() {
         </div>
       ) : (
         syllabus.map((sub) => {
-          const pct = Math.min(100, Math.max(0, sub.completedPercent || 0));
+          const pct = percentOf(sub.topics);
           return (
             <div key={sub.subject} className="card" style={{ marginBottom: 'var(--sp-lg)' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--sp-md)' }}>
                 <div style={{ fontSize: 16, fontWeight: 700 }}>{sub.subject}</div>
-                <span className="badge" style={{ background: 'var(--tint-slate)', color: 'var(--clr-accent)' }}>
-                  {pct}% completed
+                <span className={`badge ${pct === 100 ? 'badge-success' : 'badge-info'}`}>
+                  {pct === 100 ? 'Finished' : `${pct}% completed`}
                 </span>
               </div>
 
-              {/* Progress bar */}
+              {/* Progress bar — derived from the topic chips below */}
               <div style={{ height: 6, borderRadius: 'var(--r-full)', background: 'var(--clr-bg-2)', overflow: 'hidden', marginBottom: 'var(--sp-md)' }}>
                 <div style={{ width: `${pct}%`, height: '100%', background: 'linear-gradient(90deg, var(--clr-primary), var(--clr-accent))' }} />
               </div>
 
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--sp-sm)' }}>
                 {sub.topics.map((t) => (
-                  <span key={t} className="badge" style={{ background: 'var(--tint-green)', color: 'var(--clr-success)' }}>
-                    <Check size={11} style={{ marginRight: 4 }} />{t}
+                  <span key={t.topic} className={`topic-chip${t.done ? ' topic-chip--done' : ''}`}>
+                    {t.done && <Check size={11} />}
+                    {t.topic}
                   </span>
                 ))}
               </div>

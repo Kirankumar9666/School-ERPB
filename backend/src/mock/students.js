@@ -120,9 +120,19 @@ const MOCK_ACHIEVEMENTS = {
   ],
 };
 
+/** Per-student document records (metadata only — real file storage is future work) */
+const MOCK_STUDENT_DOCUMENTS = {
+  'stu-001': [
+    { id: 'sdoc-001', type: 'Birth Certificate', fileName: 'birth_certificate.pdf', uploadedAt: '2022-06-01T00:00:00Z' },
+    { id: 'sdoc-002', type: 'Transfer Certificate', fileName: 'tc_previous_school.pdf', uploadedAt: '2022-06-05T00:00:00Z' },
+  ],
+  // stu-002 deliberately has none — the empty state must show for real.
+};
+
 module.exports = {
   MOCK_STUDENTS,
   MOCK_ATTENDANCE_STUDENT,
   MOCK_MARKS,
   MOCK_ACHIEVEMENTS,
+  MOCK_STUDENT_DOCUMENTS,
 };

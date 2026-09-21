@@ -19,9 +19,13 @@ const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [ta
  * @param {node} [footer]    - optional footer actions
  * @param {function} onClose - called when the modal should close
  * @param {boolean} [wide]   - wider panel for tables/rosters
+ * @param {boolean} [stacked] - render ABOVE an already-open Modal (z-index 115,
+ *   Esc/Tab consumed in capture phase so only this top layer reacts)
  * @param {{current: HTMLElement|null}} [returnFocusRef] - element to refocus on close
  */
-export default function Modal({ title, children, footer, onClose, wide = false, returnFocusRef = null }) {
+export default function Modal({
+  title, children, footer, onClose, wide = false, returnFocusRef = null, stacked = false,
+}) {
   const panelRef = useRef(null);
   // Latest-ref pattern: handlers stay fresh without re-running the setup effect
   // (which would steal focus back to the first element on every parent render).
@@ -43,13 +47,21 @@ export default function Modal({ title, children, footer, onClose, wide = false, 
 
     focusables()[0]?.focus();
 
+    // Capture phase + stopImmediatePropagation: when `stacked` is set (this
+    // dialog opens above another open `Modal`), it must consume Esc/Tab first
+    // so only the topmost layer reacts — the modal underneath stays open,
+    // dimmed and untouched (same mechanism as ConfirmModal).
     const onKeyDown = (e) => {
       if (e.key === 'Escape') {
-        e.stopPropagation();
+        if (stacked) {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+        }
         onCloseRef.current();
         return;
       }
       if (e.key !== 'Tab') return;
+      if (stacked) e.stopImmediatePropagation();
       const items = focusables();
       if (items.length === 0) return;
       const first = items[0];
@@ -64,11 +76,11 @@ export default function Modal({ title, children, footer, onClose, wide = false, 
       }
     };
 
-    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keydown', onKeyDown, stacked);
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
-      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('keydown', onKeyDown, stacked);
       document.body.style.overflow = prevOverflow;
       // eslint-disable-next-line react-hooks/exhaustive-deps
       const target = returnFocusRef2.current?.current || previouslyFocused;
@@ -79,7 +91,7 @@ export default function Modal({ title, children, footer, onClose, wide = false, 
 
   return createPortal(
     <div
-      className="modal-overlay"
+      className={`modal-overlay${stacked ? ' modal-overlay--stacked' : ''}`}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}

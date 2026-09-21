@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { GraduationCap, Plus, Pencil, Trash, Upload, Users } from 'lucide-react';
+import { ChevronRight, GraduationCap, Plus, Pencil, Trash, Upload, KeyRound, Eye } from 'lucide-react';
 import Modal from '../../components/Modal';
+import ConfirmModal from '../../components/ConfirmModal';
+import ResetPasswordModal from '../../components/ResetPasswordModal';
+import StudentProfileModal from '../../components/StudentProfileModal';
+import { contactToField, fieldToContact, isValidContact } from '../../utils/phone';
 import api from '../../services/api';
 import { loadOptions } from '../../services/options';
 import toast from 'react-hot-toast';
@@ -47,6 +51,11 @@ export default function AdminStudents() {
   const [rowRefs] = useState(() => new Map()); // class key → row element, for focus return
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // Reset-password modal: the user account of the student being reset.
+  // Null when the student has no account (the button only renders when userId exists).
+  const [resettingUser, setResettingUser] = useState(null);
+  // Full profile view: the student whose profile is open from the class roster.
+  const [viewing, setViewing] = useState(null);
 
   const load = (query = q) =>
     Promise.all([
@@ -107,7 +116,7 @@ export default function AdminStudents() {
   const openEdit = (s) => {
     setForm({
       name: s.name || '', class: s.class || '', section: s.section || '', rollNumber: s.rollNumber || '',
-      parentName: s.parentName || '', guardianContact: s.guardianContact || '',
+      parentName: s.parentName || '', guardianContact: contactToField(s.guardianContact),
       admissionYear: s.admissionYear || '', bloodGroup: s.bloodGroup || '', dob: s.dob || '',
       feeTotal: s.feeTotal ?? '', feeDues: s.feeDues ?? '', address: s.address || '',
     });
@@ -115,22 +124,31 @@ export default function AdminStudents() {
     setModal({ mode: 'edit', student: s });
   };
 
-  const handleDelete = async (s) => {
-    if (!window.confirm(`Delete student "${s.name}"? This cannot be undone.`)) return;
-    try {
-      await api.delete(`/admin/students/${s.id}`);
-      toast.success('Student deleted.');
-      const fresh = await load();
-      // Keep an open roster modal, but rebind it to the refreshed summary row
-      // (close it if the class no longer exists after the delete).
-      setModal((m) => {
-        if (m?.mode !== 'roster') return m;
-        const updated = fresh.classes.find((x) => x.key === m.cls.key);
-        return updated ? { ...m, cls: updated } : null;
-      });
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Delete failed.');
-    }
+  // Destructive-action confirmation (ConfirmModal replaces window.confirm)
+  const [confirm, setConfirm] = useState(null);
+
+  const handleDelete = (s) => {
+    setConfirm({
+      title: 'Delete Student',
+      message: `Delete student “${s.name}”? This cannot be undone.`,
+      onConfirm: async () => {
+        try {
+          await api.delete(`/admin/students/${s.id}`);
+          toast.success('Student deleted.');
+          const fresh = await load();
+          // Keep an open roster modal, but rebind it to the refreshed summary row
+          // (close it if the class no longer exists after the delete).
+          setModal((m) => {
+            if (m?.mode !== 'roster') return m;
+            const updated = fresh.classes.find((x) => x.key === m.cls.key);
+            return updated ? { ...m, cls: updated } : null;
+          });
+        } catch (err) {
+          toast.error(err.response?.data?.message || 'Delete failed.');
+        }
+        setConfirm(null);
+      },
+    });
   };
 
   const toPayload = (f) => ({
@@ -139,7 +157,7 @@ export default function AdminStudents() {
     section: String(f.section).trim().toUpperCase(),
     rollNumber: f.rollNumber.trim() || undefined,
     parentName: f.parentName.trim() || undefined,
-    guardianContact: f.guardianContact.trim() || undefined,
+    guardianContact: fieldToContact(f.guardianContact) || undefined,
     address: f.address.trim() || undefined,
     admissionYear: f.admissionYear === '' ? undefined : Number(f.admissionYear),
     bloodGroup: f.bloodGroup.trim() || undefined,
@@ -154,12 +172,25 @@ export default function AdminStudents() {
       setError('Name, Class and Section are required.');
       return;
     }
+    if (!isValidContact(form.guardianContact)) {
+      setError('Enter a valid 10-digit contact number.');
+      return;
+    }
     setSaving(true);
     try {
       const payload = toPayload(form);
-      if (modal.mode === 'create') await api.post('/admin/students', payload);
-      else await api.put(`/admin/students/${modal.student.id}`, payload);
-      toast.success(modal.mode === 'create' ? 'Student added!' : 'Student updated.');
+      if (modal.mode === 'create') {
+        const res = await api.post('/admin/students', payload);
+        // The server auto-provisions the login (username from the name, initial
+        // password = guardian contact) — surface it so the admin can hand it out.
+        const acc = res.data.data?.account;
+        toast.success(acc?.username
+          ? `Student added — login ${acc.username} · initial password = guardian contact`
+          : 'Student added!');
+      } else {
+        await api.put(`/admin/students/${modal.student.id}`, payload);
+        toast.success('Student updated.');
+      }
       setModal(null);
       await load();
     } catch (err) {
@@ -230,37 +261,62 @@ export default function AdminStudents() {
           {q ? `No students match “${q}”.` : 'No students yet. Add your first admission.'}
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-md)' }}>
-          {classes.map((c) => {
-            return (
-              <div key={c.key}>
-                <div
-                  className="doc-item doc-item--link"
-                  onClick={() => openRoster(c)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openRoster(c); } }}
-                  role="button"
-                  tabIndex={0}
-                  aria-haspopup="dialog"
-                  ref={(el) => { if (el) rowRefs.set(c.key, el); else rowRefs.delete(c.key); }}
-                >
-                  <div className="doc-icon">
-                    <GraduationCap size={20} />
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 15, fontWeight: 700 }}>{c.class}</div>
-                    <div className="text-sm text-muted">
-                      {c.totalStudents} students · fee dues {money(c.feeDues)}
+        <div className="class-grid">
+          {classes.map((c) => (
+            <div
+              key={c.key}
+              className="class-card"
+              onClick={() => openRoster(c)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openRoster(c); } }}
+              role="button"
+              tabIndex={0}
+              aria-haspopup="dialog"
+              ref={(el) => { if (el) rowRefs.set(c.key, el); else rowRefs.delete(c.key); }}
+            >
+              <div className="class-card-top">
+                <div className="class-card-icon">
+                  <GraduationCap size={18} />
+                </div>
+                <ChevronRight size={18} className="class-card-chevron" aria-hidden="true" />
+              </div>
+              <div className="class-card-name">{c.class}</div>
+              <div className="class-card-count">
+                {c.totalStudents} {c.totalStudents === 1 ? 'student' : 'students'}
+              </div>
+              <div className="class-card-dues">
+                <span className="class-card-dues-label">Fee dues</span>
+                {c.feeDues > 0
+                  ? <span className="badge badge-danger">{money(c.feeDues)}</span>
+                  : <span className="badge badge-success">No dues</span>}
+              </div>
+              {c.avgMarks != null ? (
+                <div className="class-card-stats">
+                  <div className="class-card-stats-row">
+                    <div className="class-card-stat">
+                      <div className="class-card-stat-value">{c.avgMarks}%</div>
+                      <div className="class-card-stat-label">Avg Score</div>
+                    </div>
+                    <div className="class-card-stat">
+                      <div className="class-card-stat-value">{c.topScore}%</div>
+                      <div className="class-card-stat-label">Top Score</div>
                     </div>
                   </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div className="text-sm">{c.avgMarks != null ? `Avg ${c.avgMarks}%` : 'No marks yet'}</div>
-                    <div className="text-sm text-muted">{c.topScore != null ? `Top ${c.topScore}%` : '—'}</div>
+                  <div
+                    className="progress-track"
+                    role="img"
+                    aria-label={`Average score ${c.avgMarks}%`}
+                  >
+                    <div
+                      className="progress-fill"
+                      style={{ width: `${Math.max(0, Math.min(100, c.avgMarks))}%` }}
+                    />
                   </div>
-                  <Users size={18} className="text-muted" aria-hidden="true" />
                 </div>
-              </div>
-            );
-          })}
+              ) : (
+                <div className="class-card-no-marks">No marks recorded yet</div>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
@@ -328,11 +384,29 @@ export default function AdminStudents() {
                         <div className="flex gap-sm" style={{ alignItems: 'center' }}>
                           <button
                             className="btn btn-secondary btn-sm"
+                            onClick={() => setViewing(s)}
+                            aria-label={`View profile of ${s.name}`}
+                            title="View full profile"
+                          >
+                            <Eye size={14} />
+                          </button>
+                          <button
+                            className="btn btn-secondary btn-sm"
                             onClick={() => openEdit(s)}
                             aria-label={`Edit ${s.name}`}
                           >
                             <Pencil size={14} />
                           </button>
+                          {s.userId && (
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => setResettingUser({ id: s.userId, name: s.name })}
+                              aria-label={`Reset password for ${s.name}`}
+                              title={s.userId ? undefined : 'No user account for this student'}
+                            >
+                              <KeyRound size={14} />
+                            </button>
+                          )}
                           <button
                             className="btn btn-danger btn-sm"
                             onClick={() => handleDelete(s)}
@@ -404,6 +478,33 @@ export default function AdminStudents() {
             per file. Added atomically — if any row is invalid, nothing is saved.
           </div>
         </Modal>
+      )}
+
+      {viewing && (
+        <StudentProfileModal
+          student={viewing}
+          onClose={() => setViewing(null)}
+        />
+      )}
+
+      {resettingUser && (
+        <ResetPasswordModal
+          user={resettingUser}
+          onClose={() => setResettingUser(null)}
+        />
+      )}
+
+      {confirm && (
+        <ConfirmModal
+          title={confirm.title}
+          confirmLabel="Delete"
+          cancelLabel="Cancel"
+          tone="danger"
+          onClose={() => setConfirm(null)}
+          onConfirm={confirm.onConfirm}
+        >
+          <p>{confirm.message}</p>
+        </ConfirmModal>
       )}
     </div>
   );

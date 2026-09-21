@@ -15,9 +15,15 @@ const { requireRole } = require('../../middleware/role.middleware');
 const { ROLES, EMPLOYEE_ROLES } = require('../../constants/roles');
 const { ANNOUNCEMENT_CATEGORIES, ACHIEVEMENT_TYPES } = require('../../constants/options');
 const { sendSuccess, sendError, sendValidationError } = require('../../utils/response');
+const { contactSchema } = require('../../utils/phone');
 const prisma = require('../../services/prisma');
 const { isTransientDbError } = require('../../services/prisma');
 const cache = require('../../utils/cache');
+const {
+  bulkAttendanceSchema,
+  loadAttendanceRoster,
+  saveBulkAttendance,
+} = require('../../services/attendance');
 const {
   mapStudent,
   mapEmployee,
@@ -27,12 +33,18 @@ const {
   mapPeriod,
   mapAchievement,
   monthLabel,
+  normalizeSyllabusTopics,
   statusToDb,
   statusToApi,
   classIdOf,
   toDateStr,
   toIso,
+  schoolToday,
 } = require('../../services/mappers');
+const {
+  loadTakenUsernames,
+  createStudentAccount,
+} = require('../../services/studentAccounts');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -79,9 +91,17 @@ const apiDate = (value) => (value ? new Date(`${value}T00:00:00.000Z`) : null);
 
 /* ---------- Bulk marks entry (CSV / XLSX) ---------- */
 
-/** Long/tidy format — one row per student per subject. Header row required, exact order. */
+/**
+ * Long/tidy format — one row per student per subject. Header row required, exact order.
+ *
+ * Deliberately carries NO Class/Section columns: the class is chosen once with
+ * the Select Class dropdown on the Marks Entry page and posted with the file, so
+ * the spreadsheet can never contradict the page (or silently target another
+ * class). RollNumber alone identifies the student because roll numbers are
+ * unique per class (`@@unique([classId, rollNumber])`) — see schema.prisma.
+ */
 const MARKS_BULK_COLUMNS = [
-  'RollNumber', 'StudentName', 'Class', 'Section', 'ExamName', 'ExamDate',
+  'RollNumber', 'StudentName', 'ExamName', 'ExamDate',
   'Subject', 'MaxMarks', 'ObtainedMarks',
 ];
 
@@ -94,15 +114,28 @@ const marksBulkUpload = multer({ storage: multer.memoryStorage(), limits: { file
 /**
  * Format placeholder row shipped in the downloadable template.
  *
- * Deliberately contains no student data (no names, roll numbers, classes,
- * subjects or marks): the angle-bracket tokens cannot match a student, so
- * uploading the untouched template is rejected row-by-row instead of silently
- * writing invented results.
+ * Deliberately contains no student data (no names, roll numbers, subjects or
+ * marks): the angle-bracket tokens cannot match a student, so uploading the
+ * untouched template is rejected row-by-row instead of silently writing
+ * invented results.
  */
 const MARKS_BULK_PLACEHOLDER_ROW = [
-  '<RollNumber>', '<StudentName>', '<Class>', '<Section>', '<ExamName>',
-  '<ExamDate>', '<Subject>', '<MaxMarks>', '<ObtainedMarks>',
+  '<RollNumber>', '<StudentName>', '<ExamName>', '<ExamDate>',
+  '<Subject>', '<MaxMarks>', '<ObtainedMarks>',
 ];
+
+/**
+ * Human label for a Class row — identical shape to `options.classOptions()`
+ * ('Class 10A'), so error messages name the class exactly as the Select Class
+ * dropdown does. Deriving it here keeps the wording in one place.
+ */
+const classLabelOf = (cls) => `Class ${cls.grade}${cls.section}`;
+
+/** RFC-4180 CSV cell: quote only when the value needs it (doubling inner quotes) */
+const csvCell = (value) => {
+  const text = String(value ?? '');
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
 
 /** Build a UTC-midnight Date, rejecting impossible calendar dates (e.g. 31-02-2026) */
 const utcDate = (y, mo, d) => {
@@ -172,7 +205,8 @@ const studentSchema = z.object({
   section: z.string().length(1),
   rollNumber: z.string().min(1).max(50).optional(),
   parentName: z.string().min(2).max(100).optional(),
-  guardianContact: z.string().min(5).max(25).optional(),
+  // Contact fields are the shared digits-only rule (exactly 10) — see utils/phone.
+  guardianContact: contactSchema.optional(),
   address: z.string().min(5).max(300).optional(),
   admissionYear: z.number().int().min(1990).max(2100).optional(),
   bloodGroup: z.string().max(5).optional(),
@@ -181,9 +215,19 @@ const studentSchema = z.object({
   feeDues: z.number().min(0).optional(),
 });
 
-/** GET /api/v1/admin/students — list all students */
+/**
+ * GET /api/v1/admin/students — list all students.
+ * `?classId=` narrows the roster to one class (the Marks Entry page reads the
+ * selected class's students this way, so the dropdown and every table on that
+ * page can only ever contain that class's students).
+ */
 router.get('/students', async (req, res) => {
-  const rows = await prisma.student.findMany({ include: { class: true }, orderBy: { id: 'asc' } });
+  const { classId } = req.query;
+  const rows = await prisma.student.findMany({
+    where: classId ? { classId: String(classId) } : undefined,
+    include: { class: true },
+    orderBy: { id: 'asc' },
+  });
   return sendSuccess(res, rows.map(mapStudent));
 });
 
@@ -484,11 +528,25 @@ router.post('/students/bulk', bulkUpload.single('file'), async (req, res) => {
     }
     createdRows.push(row);
   }
+
+  /* ---------- 5. Auto-provision a login per student (no manual step) ---------- */
+  // One STUDENT account per created student: username from the name (suffix
+  // on collision), initial password = guardian contact. Students without a
+  // contact on file are skipped (nothing to derive a password from) — the
+  // response reports exactly how many accounts were created.
+  const taken = await loadTakenUsernames();
+  const accounts = [];
+  for (const row of createdRows) {
+    if (!row) continue;
+    const account = await createStudentAccount(row, { taken });
+    if (account) accounts.push(account);
+  }
   const created = createdRows.map(mapStudent);
-  return sendSuccess(res, { created, count: created.length }, `${created.length} students added`, 201);
+  const message = `${created.length} students added · ${accounts.length} login account${accounts.length === 1 ? '' : 's'} created (initial password = guardian contact)`;
+  return sendSuccess(res, { created, count: created.length, accountsCreated: accounts.length, accounts }, message, 201);
 });
 
-/** POST /api/v1/admin/students — create student */
+/** POST /api/v1/admin/students — create student (login auto-provisioned) */
 router.post('/students', async (req, res) => {
   const parsed = studentSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
@@ -499,7 +557,14 @@ router.post('/students', async (req, res) => {
       data: { id: newId('stu'), ...(await studentDataFrom(parsed.data)) },
       include: { class: true },
     });
-    return sendSuccess(res, mapStudent(created), 'Student created', 201);
+    // Auto-provision the student's login: username from the name (suffix on
+    // collision), initial password = guardian contact. Null when the student
+    // has no guardian contact on file (nothing to derive a password from).
+    const account = await createStudentAccount(created, { taken: await loadTakenUsernames() });
+    const message = account
+      ? `Student created. Login: ${account.username} (initial password = guardian contact)`
+      : 'Student created';
+    return sendSuccess(res, { ...mapStudent(created), account }, message, 201);
   } catch (err) {
     if (err.code === 'P2002') return sendError(res, uniqueErrorMessage(err), 409, 'DUPLICATE');
     throw err;
@@ -548,10 +613,10 @@ const employeeSchema = z.object({
   gender: z.enum(Object.values(Gender)).optional(),
   dob: dateStr.optional(),
   bloodGroup: z.string().max(5).optional(),
-  mobile: z.string().min(5).max(25).optional(),
+  mobile: contactSchema.optional(),
   email: z.string().email().optional(),
   address: z.string().min(5).max(300).optional(),
-  emergencyContact: z.string().min(5).max(25).optional(),
+  emergencyContact: contactSchema.optional(),
   department: z.string().min(1).max(100).optional(),
   designation: z.string().min(1).max(100).optional(),
   role: z.enum(EMPLOYEE_ROLES).optional(),
@@ -561,6 +626,16 @@ const employeeSchema = z.object({
   reportingPrincipal: z.string().max(100).optional(),
   employmentType: z.enum(Object.values(EmploymentType)).optional(),
   status: z.enum(Object.values(AccountStatus)).optional(),
+  // Default salary structure (₹, whole rupees, non-negative) — saved on the
+  // employee form, prefilled into each new payroll month. Component set
+  // mirrors PayrollRecord / payrollSchema exactly.
+  basicPay: z.number().int().min(0).max(10000000).optional(),
+  hra: z.number().int().min(0).max(10000000).optional(),
+  transportAllowance: z.number().int().min(0).max(10000000).optional(),
+  medicalAllowance: z.number().int().min(0).max(10000000).optional(),
+  providentFund: z.number().int().min(0).max(10000000).optional(),
+  professionalTax: z.number().int().min(0).max(10000000).optional(),
+  tds: z.number().int().min(0).max(10000000).optional(),
 });
 
 /** Employee payload → Prisma data (dates as @db.Date, enums verbatim) */
@@ -583,6 +658,15 @@ const employeeDataFrom = (d) => ({
   reportingPrincipal: d.reportingPrincipal ?? null,
   employmentType: d.employmentType ?? null,
   ...(d.status !== undefined ? { status: d.status } : {}),
+  // Default salary structure — always written in full (the form sends every
+  // component), so a partial payload never leaves a stale component behind.
+  basicPay: d.basicPay ?? 0,
+  hra: d.hra ?? 0,
+  transportAllowance: d.transportAllowance ?? 0,
+  medicalAllowance: d.medicalAllowance ?? 0,
+  providentFund: d.providentFund ?? 0,
+  professionalTax: d.professionalTax ?? 0,
+  tds: d.tds ?? 0,
 });
 
 /** GET /api/v1/admin/employees — list all employees */
@@ -711,6 +795,21 @@ router.get('/payroll', async (req, res) => {
     designation: e.designation,
     role: e.role,
     status: e.status,
+    // Default salary structure (mapped like a payroll record) so a brand-new
+    // month starts from the employee's saved structure, not zeros.
+    defaultSalary: {
+      basicPay: e.basicPay,
+      allowances: {
+        hra: e.hra,
+        transportAllowance: e.transportAllowance,
+        medicalAllowance: e.medicalAllowance,
+      },
+      deductions: {
+        providentFund: e.providentFund,
+        professionalTax: e.professionalTax,
+        tds: e.tds,
+      },
+    },
     payroll: history[e.id] || [],
   })));
 });
@@ -809,7 +908,11 @@ router.post('/payroll/:employeeId/:month/mark-paid', async (req, res) => {
 
 /* ---------- Announcements ---------- */
 
-/** DB row → mock API shape (createdAt as ISO string) */
+/**
+ * DB row → API shape. showFrom/showUntil are the visibility window: a
+ * circular appears on the portals only while today (the school's real
+ * current date, computed per request) is inside [showFrom, showUntil].
+ */
 const mapAnnouncement = (a) => ({
   id: a.id,
   title: a.title,
@@ -817,18 +920,31 @@ const mapAnnouncement = (a) => ({
   targetRoles: a.targetRoles,
   category: a.category,
   createdAt: toIso(a.createdAt),
+  showFrom: toDateStr(a.showFrom),
+  showUntil: toDateStr(a.showUntil),
 });
+
+/** showUntil ≥ showFrom (both 'YYYY-MM-DD' strings — lexicographic works) */
+const scheduleRangeErrors = (showFrom, showUntil) =>
+  showFrom > showUntil ? { showUntil: ['Show until must be on or after Show from.'] } : null;
 
 const announcementSchema = z.object({
   title: z.string().min(3).max(200),
   body: z.string().min(10),
   targetRoles: z.array(z.enum(Object.values(ROLES))).min(1),
   category: z.enum(ANNOUNCEMENT_CATEGORIES),
+  // Omitted on create → the circular is visible from today (server date).
+  showFrom: dateStr.optional(),
+  // Required: after this day the circular stops appearing everywhere.
+  showUntil: dateStr,
 });
 
-/** GET /api/v1/admin/announcements — list all (admin sees everything), newest first */
+/** GET /api/v1/admin/announcements — list all (admin sees everything, including
+ * scheduled and expired windows), newest showFrom first */
 router.get('/announcements', async (req, res) => {
-  const rows = await prisma.announcement.findMany({ orderBy: { createdAt: 'desc' } });
+  const rows = await prisma.announcement.findMany({
+    orderBy: [{ showFrom: 'desc' }, { createdAt: 'desc' }],
+  });
   return sendSuccess(res, rows.map(mapAnnouncement));
 });
 
@@ -837,19 +953,37 @@ router.post('/announcements', async (req, res) => {
   const parsed = announcementSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
+  // "Show from" left blank → visible from today (the real current school date).
+  const showFrom = parsed.data.showFrom || schoolToday();
+  const rangeErrors = scheduleRangeErrors(showFrom, parsed.data.showUntil);
+  if (rangeErrors) return sendValidationError(res, rangeErrors);
+
   const created = await prisma.announcement.create({
-    data: { id: newId('ann'), ...parsed.data },
+    data: { id: newId('ann'), ...parsed.data, showFrom: apiDate(showFrom), showUntil: apiDate(parsed.data.showUntil) },
   });
   return sendSuccess(res, mapAnnouncement(created), 'Announcement created', 201);
 });
 
-/** PUT /api/v1/admin/announcements/:id — update announcement */
+/** PUT /api/v1/admin/announcements/:id — update announcement (incl. extending
+ * the show window: e.g. an exam-schedule notice kept visible longer) */
 router.put('/announcements/:id', async (req, res) => {
   const parsed = announcementSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
   try {
-    const updated = await prisma.announcement.update({ where: { id: req.params.id }, data: parsed.data });
+    const existing = await prisma.announcement.findUnique({ where: { id: req.params.id } });
+    if (!existing) return sendError(res, 'Announcement not found', 404, 'NOT_FOUND');
+
+    // Omitted showFrom keeps the stored one (PUT payloads may reschedule the
+    // "Show until" date only).
+    const showFrom = parsed.data.showFrom || toDateStr(existing.showFrom);
+    const rangeErrors = scheduleRangeErrors(showFrom, parsed.data.showUntil);
+    if (rangeErrors) return sendValidationError(res, rangeErrors);
+
+    const updated = await prisma.announcement.update({
+      where: { id: req.params.id },
+      data: { ...parsed.data, showFrom: apiDate(showFrom), showUntil: apiDate(parsed.data.showUntil) },
+    });
     return sendSuccess(res, mapAnnouncement(updated), 'Announcement updated');
   } catch (err) {
     if (err.code === 'P2025') return sendError(res, 'Announcement not found', 404, 'NOT_FOUND');
@@ -953,40 +1087,13 @@ router.post('/attendance', async (req, res) => {
 
 /* ---------- Bulk attendance (class / staff-group screen) ---------- */
 
-/** Milliseconds after a confirmed save during which the same day stays editable. */
-const ATTENDANCE_EDIT_WINDOW_MS = 60 * 60 * 1000;
-
-/**
- * Load one attendance group with its members, derived live from the tables:
- * kind 'student' → a Class row (groupKey = class id), kind 'employee' → every
- * employee sharing a designation (groupKey = the designation string).
- * Returns { label, members } or null when the group does not exist.
+/*
+ * Group loading (live rosters), the 1-hour edit window and the whole-class
+ * save all live in services/attendance.js — the same module the teacher flow in
+ * the employee portal uses, so both entry points read and write identical
+ * records. This router stays the unrestricted entry point: an admin may act on
+ * any group, while the employee router enforces the teacher's own classes.
  */
-const attendanceGroup = async (kind, groupKey) => {
-  if (kind === 'student') {
-    const klass = await prisma.class.findUnique({
-      where: { id: groupKey },
-      include: { students: { orderBy: { rollNumber: 'asc' } } },
-    });
-    if (!klass) return null;
-    return { label: `${klass.grade} - Class ${klass.section}`, members: klass.students };
-  }
-  const members = await prisma.employee.findMany({
-    where: { designation: groupKey },
-    orderBy: { name: 'asc' },
-  });
-  if (members.length === 0) return null;
-  return { label: groupKey, members };
-};
-
-/** Confirmation row → API payload with the derived 1-hour edit-window state. */
-const confirmationPayload = (row) => {
-  if (!row) return null;
-  return {
-    confirmedAt: toIso(row.confirmedAt),
-    withinEditWindow: Date.now() - row.confirmedAt.getTime() < ATTENDANCE_EDIT_WINDOW_MS,
-  };
-};
 
 /**
  * GET /api/v1/admin/attendance/group?kind=student|employee&groupKey=...&date=YYYY-MM-DD
@@ -1007,55 +1114,16 @@ router.get('/attendance/group', async (req, res) => {
     return sendError(res, 'date must be YYYY-MM-DD', 400, 'VALIDATION_ERROR');
   }
 
-  const group = await attendanceGroup(kind, groupKey);
-  if (!group) {
+  const roster = await loadAttendanceRoster(kind, groupKey, dateQ);
+  if (!roster) {
     return sendError(res, kind === 'student' ? 'Class not found' : 'Staff group not found', 404, 'NOT_FOUND');
   }
 
-  const day = apiDate(dateQ);
-  const ids = group.members.map((m) => m.id);
-  const rows = ids.length
-    ? await (kind === 'student'
-      ? prisma.studentAttendance.findMany({ where: { studentId: { in: ids }, date: day } })
-      : prisma.employeeAttendance.findMany({ where: { employeeId: { in: ids }, date: day } }))
-    : [];
-  const statusById = new Map(rows.map((r) => [(kind === 'student' ? r.studentId : r.employeeId), statusToApi(r.status)]));
-
-  const confirmation = await prisma.attendanceConfirmation.findUnique({
-    where: { kind_groupKey_date: { kind, groupKey, date: day } },
-  });
-
-  return sendSuccess(res, {
-    kind,
-    groupKey,
-    date: dateQ,
-    label: group.label,
-    count: group.members.length,
-    members: group.members.map((m) => ({
-      id: m.id,
-      name: m.name,
-      /* Same field names as the students API so the roster rows and the
-         "Check student" selector render identically for both kinds. */
-      rollNumber: kind === 'student' ? m.rollNumber : m.employeeId,
-      parentName: kind === 'student' ? m.parentName : m.designation,
-      guardianContact: kind === 'student' ? m.guardianContact : m.mobile,
-      status: statusById.get(m.id) ?? null,
-    })),
-    confirmation: confirmationPayload(confirmation),
-  });
+  return sendSuccess(res, roster);
 });
 
-const bulkAttendanceSchema = z.object({
-  kind: z.enum(['student', 'employee']),
-  groupKey: z.string().min(1),
-  date: dateStr,
-  /** Explicit "Edit past attendance" — lifts the closed 1-hour window. */
-  override: z.boolean().optional(),
-  entries: z.array(z.object({
-    entityId: z.string().min(1),
-    status: z.enum(Object.values(AttendanceStatus).map(statusToApi)),
-  })).min(1),
-});
+/* Body of a whole-class save — validated by the shared schema in
+   services/attendance.js, the same contract the teacher flow accepts. */
 
 /**
  * POST /api/v1/admin/attendance/bulk — save a whole group's attendance for one
@@ -1069,106 +1137,10 @@ router.post('/attendance/bulk', async (req, res) => {
   const parsed = bulkAttendanceSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
-  const { kind, groupKey, date, entries, override } = parsed.data;
-  const day = apiDate(date);
+  const result = await saveBulkAttendance({ ...parsed.data, markedBy: req.user?.username || null });
+  if (!result.ok) return sendError(res, result.message, result.status, result.code);
 
-  const group = await attendanceGroup(kind, groupKey);
-  if (!group) {
-    return sendError(res, kind === 'student' ? 'Class not found' : 'Staff group not found', 404, 'NOT_FOUND');
-  }
-
-  // Every entry must belong to this group — rejects stale/foreign ids before
-  // anything is written (atomicity guard).
-  const memberIds = new Set(group.members.map((m) => m.id));
-  const unknown = entries.filter((e) => !memberIds.has(e.entityId)).map((e) => e.entityId);
-  if (unknown.length) {
-    return sendError(res, `Entries not in this ${kind === 'student' ? 'class' : 'group'}: ${unknown.join(', ')}`, 400, 'VALIDATION_ERROR');
-  }
-
-  const existing = await prisma.attendanceConfirmation.findUnique({
-    where: { kind_groupKey_date: { kind, groupKey, date: day } },
-  });
-  if (existing && !override && Date.now() - existing.confirmedAt.getTime() >= ATTENDANCE_EDIT_WINDOW_MS) {
-    return sendError(res, 'The 1-hour edit window for this attendance has closed', 403, 'EDIT_LOCKED');
-  }
-
-  const confirmedAt = new Date();
-  const markedBy = req.user?.username || null;
-
-  await prisma.$transaction(async (tx) => {
-    // Perf: one existence read + batched writes (createMany / grouped
-    // updateMany) instead of two sequential round trips per row. A 40-student
-    // class drops from ~80 queries to ~3; a 200-row group from ~400 to ~7.
-    // Semantics are identical to the previous per-row upserts: missing rows
-    // are created, existing rows get their status (and employee hours) set.
-    const ids = entries.map((e) => e.entityId);
-    const existingRows = kind === 'student'
-      ? await tx.studentAttendance.findMany({ where: { studentId: { in: ids }, date: day }, select: { studentId: true } })
-      : await tx.employeeAttendance.findMany({ where: { employeeId: { in: ids }, date: day }, select: { employeeId: true } });
-    const existingIds = new Set(existingRows.map((r) => (kind === 'student' ? r.studentId : r.employeeId)));
-
-    const creates = [];
-    // Updates grouped by identical payload → one updateMany per distinct status
-    const updateGroups = new Map(); // key → { statusDb, workingHours, ids[] }
-    const seen = new Set(); // in-request duplicates: later entries act as updates
-    entries.forEach((e) => {
-      const statusDb = statusToDb(e.status);
-      const isExisting = existingIds.has(e.entityId) || seen.has(e.entityId);
-      seen.add(e.entityId);
-      if (isExisting) {
-        const workingHours = kind === 'employee' ? (e.status === 'absent' ? 0 : 8) : null;
-        const key = `${statusDb}|${workingHours}`;
-        if (!updateGroups.has(key)) updateGroups.set(key, { statusDb, workingHours, ids: [] });
-        updateGroups.get(key).ids.push(e.entityId);
-      } else if (kind === 'student') {
-        creates.push({ studentId: e.entityId, date: day, status: statusDb });
-      } else {
-        creates.push({
-          employeeId: e.entityId,
-          date: day,
-          status: statusDb,
-          workingHours: e.status === 'absent' ? 0 : 8,
-        });
-      }
-    });
-
-    // Creates first, then updates — an in-request duplicate of a created row
-    // is picked up by its updateMany (same transaction, same connection).
-    if (creates.length) {
-      if (kind === 'student') {
-        await tx.studentAttendance.createMany({ data: creates });
-      } else {
-        await tx.employeeAttendance.createMany({ data: creates });
-      }
-    }
-    for (const group of updateGroups.values()) {
-      const data = kind === 'employee'
-        ? { status: group.statusDb, workingHours: group.workingHours }
-        : { status: group.statusDb };
-      if (kind === 'student') {
-        await tx.studentAttendance.updateMany({ where: { studentId: { in: group.ids }, date: day }, data });
-      } else {
-        await tx.employeeAttendance.updateMany({ where: { employeeId: { in: group.ids }, date: day }, data });
-      }
-    }
-
-    await tx.attendanceConfirmation.upsert({
-      where: { kind_groupKey_date: { kind, groupKey, date: day } },
-      update: { confirmedAt, markedBy },
-      create: { kind, groupKey, date: day, confirmedAt, markedBy },
-    });
-  });
-
-  const absent = entries.filter((e) => e.status === 'absent').length;
-  return sendSuccess(res, {
-    kind,
-    groupKey,
-    date,
-    saved: entries.length,
-    absent,
-    present: entries.length - absent,
-    confirmedAt: toIso(confirmedAt),
-  }, 'Attendance confirmed', 201);
+  return sendSuccess(res, result.data, 'Attendance confirmed', 201);
 });
 
 /* ---------- Marks ---------- */
@@ -1237,11 +1209,20 @@ router.post('/marks', async (req, res) => {
   }, 'Marks uploaded', 201);
 });
 
-/** GET /api/v1/admin/marks?studentId= — marks grouped per exam (object keyed by student when unfiltered) */
+/**
+ * GET /api/v1/admin/marks?studentId=&classId= — marks grouped per exam
+ * (object keyed by student when no studentId is given).
+ * `?classId=` keeps only the rows whose student is in that class, so the Marks
+ * Entry page recomputes its stat cards from the selected class alone instead of
+ * filtering a school-wide payload client-side.
+ */
 router.get('/marks', async (req, res) => {
-  const { studentId } = req.query;
+  const { studentId, classId } = req.query;
   const entries = await prisma.marksEntry.findMany({
-    where: studentId ? { studentId } : undefined,
+    where: {
+      ...(studentId ? { studentId: String(studentId) } : {}),
+      ...(classId ? { student: { classId: String(classId) } } : {}),
+    },
     include: { exam: true },
     orderBy: [{ exam: { date: 'asc' } }, { subject: 'asc' }],
   });
@@ -1265,12 +1246,19 @@ router.get('/marks', async (req, res) => {
  * POST /api/v1/admin/marks/bulk — bulk marks entry from a CSV/XLSX file.
  * Long/tidy format, one row per student per subject; header row required in
  * this exact order:
- *   RollNumber, StudentName, Class, Section, ExamName, ExamDate, Subject, MaxMarks, ObtainedMarks
- * Rows are matched to students by RollNumber (never by name — names collide).
- * StudentName/Class/Section are readability/cross-check columns; Class+Section
- * are only used to disambiguate when one roll number exists in several classes.
- * Subject is free text — subjects are admin-defined per exam, so there is no
- * fixed subject list to validate against.
+ *   RollNumber, StudentName, ExamName, ExamDate, Subject, MaxMarks, ObtainedMarks
+ *
+ * The class is NOT part of the file: it is chosen on the Marks Entry page with
+ * the Select Class dropdown and posted as `classId` (body field, `?classId=`
+ * also accepted). Only that class's students are loaded, so a roll number that
+ * belongs to any other class is rejected row-by-row and never silently files
+ * marks against the wrong class.
+ *
+ * Rows are matched to students by RollNumber (never by name — names collide),
+ * which is sufficient because roll numbers are unique within a class.
+ * StudentName is a readability/cross-check column. Subject is free text —
+ * subjects are admin-defined per exam, so there is no fixed subject list to
+ * validate against.
  * Atomic: every row is validated before a single write happens, so an invalid
  * row rejects the whole file and the response names the failing row(s)/column(s).
  * Up to 200 rows per file.
@@ -1284,6 +1272,21 @@ router.post('/marks/bulk', marksBulkUpload.single('file'), async (req, res) => {
   if (!originalName.endsWith('.csv') && !originalName.endsWith('.xlsx')) {
     return sendError(res, 'Unsupported file type — upload a .csv or .xlsx file', 400, 'BAD_REQUEST');
   }
+
+  /* ---------- 0. Which class is this file for? ---------- */
+  // Required: without it the file has no class context at all (Class/Section are
+  // no longer template columns), so accepting the upload would mean guessing.
+  const classId = String(req.body?.classId ?? req.query?.classId ?? '').trim();
+  if (!classId) {
+    return sendValidationError(res, {
+      classId: 'Choose a class on the Marks Entry page before uploading — the file no longer carries a Class column',
+    });
+  }
+
+  const cls = await prisma.class.findUnique({ where: { id: classId } });
+  if (!cls) return sendError(res, 'Class not found', 404, 'NOT_FOUND');
+
+  const classLabel = classLabelOf(cls);
 
   /* ---------- 1. Parse the file server-side (no manual string splitting) ---------- */
   let records;
@@ -1348,16 +1351,18 @@ router.post('/marks/bulk', marksBulkUpload.single('file'), async (req, res) => {
   const entries = [];
   const seen = new Set(); // duplicate student+exam+subject guard for this file
 
-  const students = await prisma.student.findMany({ include: { class: true } });
+  const students = await prisma.student.findMany({
+    where: { classId },
+    include: { class: true },
+  });
 
-  // Roll numbers are unique per class, so the same roll number can exist in
-  // more than one class — index by roll number and keep the whole bucket.
+  // Roll numbers are unique within a class (@@unique([classId, rollNumber])),
+  // so inside the selected class the roll number alone identifies the student.
   const byRoll = new Map();
   students.forEach((s) => {
     const key = String(s.rollNumber ?? '').trim().toLowerCase();
     if (!key) return;
-    if (!byRoll.has(key)) byRoll.set(key, []);
-    byRoll.get(key).push(s);
+    byRoll.set(key, s);
   });
 
   dataRows.forEach((cells, i) => {
@@ -1401,20 +1406,11 @@ router.post('/marks/bulk', marksBulkUpload.single('file'), async (req, res) => {
       rowErrors.ExamDate = 'Must be a valid date (dd-mm-yyyy)';
     }
 
-    // Match the student by roll number
-    const candidates = byRoll.get(text('RollNumber').toLowerCase()) || [];
-    let student = null;
-    if (candidates.length === 0) {
-      rowErrors.RollNumber = 'No student with this roll number';
-    } else if (candidates.length === 1) {
-      student = candidates[0];
-    } else {
-      // Same roll number in several classes — Class/Section must pick one
-      const grade = text('Class');
-      const section = text('Section').toUpperCase();
-      const narrowed = candidates.filter((c) => String(c.class.grade) === grade && c.class.section.toUpperCase() === section);
-      if (narrowed.length === 1) student = narrowed[0];
-      else rowErrors.RollNumber = `Roll number exists in ${candidates.length} classes — Class and Section must identify one of them`;
+    // Match the student by roll number — scoped to the selected class. A roll
+    // number that exists only in some OTHER class is rejected right here.
+    const student = byRoll.get(text('RollNumber').toLowerCase()) || null;
+    if (!student) {
+      rowErrors.RollNumber = `No student with this roll number in ${classLabel}`;
     }
 
     // One row per student per exam per subject — duplicates are ambiguous
@@ -1543,7 +1539,7 @@ router.post('/marks/bulk', marksBulkUpload.single('file'), async (req, res) => {
       maxMarks: e.maxMarks,
       obtained: e.obtained,
     })),
-  }, `${saved} mark row${saved === 1 ? '' : 's'} saved for ${studentsTouched} student${studentsTouched === 1 ? '' : 's'} in ${examsTouched} exam${examsTouched === 1 ? '' : 's'}`, 201);
+  }, `${saved} mark row${saved === 1 ? '' : 's'} saved for ${studentsTouched} student${studentsTouched === 1 ? '' : 's'} in ${examsTouched} exam${examsTouched === 1 ? '' : 's'} (${classLabel})`, 201);
 });
 
 /**
@@ -1571,17 +1567,16 @@ router.get('/marks/bulk-template', async (req, res) => {
     '',
     `1. Go to the 'Marks' tab. Row 2 is a FORMAT PLACEHOLDER — replace every <...> value with real data (keep the header row).`,
     '2. Use ONE ROW PER STUDENT PER SUBJECT (long/tidy format) — not one row per student with a column per subject.',
-    '3. Students are matched by RollNumber, so it must match a student already in the system.',
-    '4. Subject is free text. Any subject name is accepted — subjects are defined by the admin, not a fixed list.',
-    '5. Save as .xlsx or .csv, then upload it with "Bulk Upload" on the Marks Entry page.',
+    `3. Choose the class on the Marks Entry page BEFORE uploading. There are NO Class/Section columns in this file — the class comes from the page's Select Class dropdown, and every row must belong to that class.`,
+    `4. Students are matched by RollNumber, so it must match a student already in the selected class.`,
+    '5. Subject is free text. Any subject name is accepted — subjects are defined by the admin, not a fixed list.',
+    '6. Save as .xlsx or .csv, then upload it with "Bulk Upload" on the Marks Entry page.',
     '',
     'Column reference',
   ].forEach((line) => notes.addRow([line]));
   [
-    ['RollNumber', 'Required. Used to match the student record.'],
+    ['RollNumber', 'Required. Used to match the student record — must belong to the selected class.'],
     ['StudentName', 'Required, for readability/cross-check only — the system matches on RollNumber.'],
-    ['Class', 'Required. Grade/standard, e.g. 9, 10.'],
-    ['Section', 'Required. Section letter, e.g. A, B.'],
     ['ExamName', 'Required. e.g. Unit Test 2.'],
     ['ExamDate', 'Required. Format dd-mm-yyyy (Excel date cells also work).'],
     ['Subject', 'Required. Any subject name — not limited to a fixed list.'],
@@ -1592,6 +1587,7 @@ router.get('/marks/bulk-template', async (req, res) => {
   [
     `- Up to ${MARKS_BULK_MAX_ROWS} rows per file.`,
     '- Rows are validated together: if any row is invalid nothing is saved (atomic upload).',
+    `- Every row must belong to the class chosen with the Select Class dropdown — rows for students of other classes are rejected and nothing is saved.`,
     '- A student with 5 subjects needs 5 rows, all sharing the same RollNumber, ExamName and ExamDate.',
   ].forEach((line) => notes.addRow([line]));
   notes.getColumn(1).width = 18;
@@ -1658,20 +1654,31 @@ router.delete('/timetable/:classKey/:period', async (req, res) => {
 
 /* ---------- Syllabus ---------- */
 
-const syllabusSchema = z.object({
-  classKey: z.string().regex(/^cls-\d+[A-Z]$/),
-  subject: z.string().min(1).max(100),
-  topics: z.array(z.string().min(1)).min(1),
-  completedPercent: z.number().min(0).max(100),
+/** One topic: non-empty name, explicit done flag (never a client-supplied %). */
+const topicSchema = z.object({
+  topic: z.string().trim().min(1).max(200),
+  done: z.boolean().default(false),
 });
 
-/** GET /api/v1/admin/syllabus — all class syllabus records, grouped by class id */
+const syllabusSchema = z.object({
+  classKey: z.string().regex(/^cls-\d+[A-Z]$/),
+  subject: z.string().trim().min(1).max(100),
+  // Full replacement: the client always sends the complete topic list with the
+  // current done/not-done state (chip toggles + renames/additions/removals).
+  topics: z.array(topicSchema).min(1).max(100),
+});
+
+/**
+ * GET /api/v1/admin/syllabus — all class syllabus records, grouped by class id.
+ * Topics are normalized [{ topic, done }]; completion is derived client-side
+ * (done count / total) and never stored.
+ */
 router.get('/syllabus', async (req, res) => {
   const rows = await prisma.syllabusEntry.findMany({ orderBy: [{ classId: 'asc' }, { subject: 'asc' }] });
   const out = {};
   rows.forEach((s) => {
     if (!out[s.classId]) out[s.classId] = [];
-    out[s.classId].push({ subject: s.subject, topics: s.topics, completedPercent: s.completedPercent });
+    out[s.classId].push({ subject: s.subject, topics: normalizeSyllabusTopics(s.topics) });
   });
   return sendSuccess(res, out);
 });
@@ -1744,21 +1751,74 @@ router.delete('/achievements/:id', async (req, res) => {
 
 /* ---------- Documents ---------- */
 
-const documentSchema = z.object({
-  type: z.string().min(2).max(100),
-  fileName: z.string().min(2).max(200),
+/**
+ * Document records are metadata (category + file name) — the uploaded PDF is
+ * validated server-side and then discarded; no bytes are persisted. The 5 MB
+ * cap matches every other upload in this API.
+ */
+const documentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
 });
 
+/** Multer rejections (e.g. over the 5 MB cap) become a plain 400, not a 500. */
+function documentUploadError(err, req, res, next) {
+  if (err instanceof multer.MulterError) {
+    return sendError(
+      res,
+      err.code === 'LIMIT_FILE_SIZE' ? 'File too large — the maximum size is 5 MB' : 'File upload failed',
+      400,
+      'BAD_REQUEST'
+    );
+  }
+  return next(err);
+}
+
+const documentSchema = z.object({
+  type: z.string().min(2).max(100),
+});
+
+/**
+ * Server-side PDF gate — the browser's `accept` filter is advisory, so the
+ * upload is only accepted when the real extension, the declared MIME type and
+ * the file's own `%PDF-` magic bytes all agree. A renamed .txt or a binary
+ * blob with a .pdf name is rejected here.
+ */
+function requirePdf(req, res) {
+  if (!req.file) {
+    sendError(res, 'No file uploaded — attach a PDF file', 400, 'BAD_REQUEST');
+    return false;
+  }
+  const magic = req.file.buffer.subarray(0, 5).toString('latin1') === '%PDF-';
+  if (!(/\.pdf$/i.test(req.file.originalname) && req.file.mimetype === 'application/pdf' && magic)) {
+    sendError(res, 'Only PDF files are allowed', 400, 'BAD_REQUEST');
+    return false;
+  }
+  return true;
+}
+
+/** Stored document name is derived from the actual uploaded file — never typed. */
+function docNameFrom(file) {
+  const base = file.originalname.replace(/\.[^.]*$/, '').trim();
+  return (base || 'Document').slice(0, 200);
+}
+
 /** POST /api/v1/admin/employees/:id/documents — upload document record */
-router.post('/employees/:id/documents', async (req, res) => {
+router.post('/employees/:id/documents', documentUpload.single('file'), documentUploadError, async (req, res) => {
   const parsed = documentSchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
+  if (!requirePdf(req, res)) return;
 
   const employee = await prisma.employee.findUnique({ where: { id: req.params.id } });
   if (!employee) return sendError(res, 'Employee not found', 404, 'NOT_FOUND');
 
   const created = await prisma.employeeDocument.create({
-    data: { id: newId('doc'), employeeId: employee.id, ...parsed.data },
+    data: {
+      id: newId('doc'),
+      employeeId: employee.id,
+      type: parsed.data.type,
+      fileName: docNameFrom(req.file),
+    },
   });
   return sendSuccess(res, {
     id: created.id,
@@ -1795,16 +1855,90 @@ router.delete('/documents/:id', async (req, res) => {
   }
 });
 
+/* ---------- Student documents (mirror of the employee documents surface) ---------- */
+
+/**
+ * GET /api/v1/admin/students/:id/documents — one student's document records,
+ * newest first (strictly scoped to this student).
+ */
+router.get('/students/:id/documents', async (req, res) => {
+  const student = await prisma.student.findUnique({ where: { id: req.params.id } });
+  if (!student) return sendError(res, 'Student not found', 404, 'NOT_FOUND');
+
+  const docs = await prisma.studentDocument.findMany({
+    where: { studentId: student.id },
+    orderBy: { uploadedAt: 'desc' },
+  });
+  return sendSuccess(res, docs.map((d) => ({
+    id: d.id,
+    type: d.type,
+    fileName: d.fileName,
+    uploadedAt: toIso(d.uploadedAt),
+    studentId: d.studentId,
+  })));
+});
+
+/** POST /api/v1/admin/students/:id/documents — upload a document record */
+router.post('/students/:id/documents', documentUpload.single('file'), documentUploadError, async (req, res) => {
+  const parsed = documentSchema.safeParse(req.body);
+  if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
+  if (!requirePdf(req, res)) return;
+
+  const student = await prisma.student.findUnique({ where: { id: req.params.id } });
+  if (!student) return sendError(res, 'Student not found', 404, 'NOT_FOUND');
+
+  const created = await prisma.studentDocument.create({
+    data: {
+      id: newId('sdoc'),
+      studentId: student.id,
+      type: parsed.data.type,
+      fileName: docNameFrom(req.file),
+    },
+  });
+  return sendSuccess(res, {
+    id: created.id,
+    type: created.type,
+    fileName: created.fileName,
+    uploadedAt: toIso(created.uploadedAt),
+    studentId: created.studentId,
+  }, 'Document uploaded', 201);
+});
+
+/**
+ * DELETE /api/v1/admin/student-documents/:docId — remove exactly one student
+ * document record. Deletion is by unique document id, so it can never touch
+ * another student's records.
+ */
+router.delete('/student-documents/:docId', async (req, res) => {
+  try {
+    await prisma.studentDocument.delete({ where: { id: req.params.docId } });
+    return sendSuccess(res, { id: req.params.docId }, 'Document deleted');
+  } catch (err) {
+    if (err.code === 'P2025') return sendError(res, 'Document not found', 404, 'NOT_FOUND');
+    throw err;
+  }
+});
+
 /* ---------- Users / Password reset ---------- */
 
 /** GET /api/v1/admin/users — sanitized user list (never includes password hashes) */
 router.get('/users', async (req, res) => {
-  const users = await prisma.user.findMany({ orderBy: { id: 'asc' } });
-  return sendSuccess(res, users.map(({ passwordHash, ...safe }) => safe));
+  const users = await prisma.user.findMany({
+    orderBy: { id: 'asc' },
+    include: {
+      student: { select: { id: true } },
+      employee: { select: { id: true } },
+    },
+  });
+  return sendSuccess(res, users.map(mapUserPublic));
 });
 
 const resetPasswordSchema = z.object({
-  newPassword: z.string().min(8, 'Password must be at least 8 characters'),
+  newPassword: z.string()
+    .min(8, 'Password must be at least 8 characters')
+    .regex(/[a-z]/, 'Password must include a lowercase letter')
+    .regex(/[A-Z]/, 'Password must include an uppercase letter')
+    .regex(/[0-9]/, 'Password must include a digit'),
 });
 
 /** PUT /api/v1/admin/users/:id/reset-password */

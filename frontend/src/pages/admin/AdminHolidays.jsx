@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { PartyPopper, Plus, Trash } from 'lucide-react';
 import api from '../../services/api';
 import toast from 'react-hot-toast';
+import ConfirmModal from '../../components/ConfirmModal';
 
 /**
  * Admin Holidays — add and manage school holiday calendar.
@@ -12,6 +13,8 @@ export default function AdminHolidays() {
   const [name, setName] = useState('');
   const [date, setDate] = useState('');
   const [saving, setSaving] = useState(false);
+  // Destructive-action confirmation (ConfirmModal replaces window.confirm)
+  const [confirm, setConfirm] = useState(null);
 
   const load = () => api.get('/admin/holidays').then((r) => setHolidays(r.data.data));
 
@@ -39,15 +42,21 @@ export default function AdminHolidays() {
     }
   };
 
-  const handleDelete = async (h) => {
-    if (!window.confirm(`Delete holiday "${h.name}"? This cannot be undone.`)) return;
-    try {
-      await api.delete(`/admin/holidays/${h.id}`);
-      toast.success('Holiday removed.');
-      await load();
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Could not remove holiday.');
-    }
+  const handleDelete = (h) => {
+    setConfirm({
+      title: 'Delete Holiday',
+      message: `Delete holiday “${h.name}”? This cannot be undone.`,
+      onConfirm: async () => {
+        try {
+          await api.delete(`/admin/holidays/${h.id}`);
+          toast.success('Holiday removed.');
+          await load();
+        } catch (err) {
+          toast.error(err.response?.data?.message || 'Could not remove holiday.');
+        }
+        setConfirm(null);
+      },
+    });
   };
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
@@ -107,6 +116,19 @@ export default function AdminHolidays() {
           </div>
         )}
       </div>
+
+      {confirm && (
+        <ConfirmModal
+          title={confirm.title}
+          confirmLabel="Delete"
+          cancelLabel="Cancel"
+          tone="danger"
+          onClose={() => setConfirm(null)}
+          onConfirm={confirm.onConfirm}
+        >
+          <p>{confirm.message}</p>
+        </ConfirmModal>
+      )}
     </div>
   );
 }

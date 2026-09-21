@@ -367,6 +367,79 @@ input, select, textarea { font-family: inherit; }
 }
 .cal-day.today { outline: 2px solid var(--ink); outline-offset: 1px; }
 
+/* ═══════════════════════════════════════════════════════ COMPACT CALENDAR
+   Student Holiday Calendar — small cells instead of the tall aspect-ratio
+   squares, and holidays marked with a gold dot + gold date (not a full
+   shade). Holiday cells are real buttons that open a details popup;
+   every other day is a plain, non-interactive div. */
+.calendar-grid.compact { gap: 2px; }
+.cal-day.compact {
+  aspect-ratio: auto;
+  height: 30px;
+  font-size: 12px;
+  border-radius: var(--r-sm);
+}
+/* Holiday cells are real buttons that open a details popup — the gold dot
+   marker is scoped to them, so attendance-calendar divs with the `holiday`
+   STATUS keep their shaded look inside a compact grid. */
+button.cal-day.compact.holiday {
+  appearance: none;
+  background: transparent;
+  border: 1px dashed transparent;
+  color: var(--gold);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  transition: var(--transition);
+}
+button.cal-day.compact.holiday:hover {
+  background: var(--gold-soft);
+  border-color: #cdbd85;
+}
+button.cal-day.compact.holiday::after {
+  content: '';
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--gold);
+}
+button.cal-day.compact.holiday:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 1px;
+}
+
+/* Reminder days in a compact grid (Admin Calendar) — a plain non-interactive
+   div, marked with an accent dot so it reads differently from gold holidays. */
+.cal-day.compact.reminder {
+  color: var(--clr-accent);
+  font-weight: 600;
+}
+.cal-day.compact.reminder::after {
+  content: '';
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--clr-accent);
+}
+
+/* Late / half-day days in a compact grid (employee "My Attendance") — gold,
+   like their badges, so every status a portal can paint has a colour. */
+.cal-day.compact.late,
+.cal-day.compact.half-day {
+  background: var(--gold-soft);
+  border: 1px solid #cdbd85;
+  color: var(--gold);
+  font-weight: 600;
+}
+
 /* ═══════════════════════════════════════════════════ PROGRESS */
 .progress-track {
   height: 6px;
@@ -420,7 +493,7 @@ input, select, textarea { font-family: inherit; }
 .badge-success, .badge-approved, .badge-present, .badge-active {
   background: var(--green-soft); color: var(--green); border-color: #c4d4c2;
 }
-.badge-warning, .badge-late, .badge-pending {
+.badge-warning, .badge-late, .badge-pending, .badge-half-day {
   background: var(--gold-soft); color: var(--gold); border-color: #ddd0a4;
 }
 .badge-danger, .badge-rejected, .badge-absent {
@@ -433,6 +506,42 @@ input, select, textarea { font-family: inherit; }
 .badge-holiday {
   background: var(--gold-soft); color: var(--gold);
   border: 1px dashed #cdbd85;
+}
+/* ═══════════════════════════════════════════════════ TOPIC CHIPS */
+/* Syllabus completion — done: soft green stamp; pending: neutral outline. */
+.topic-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 2px;
+  border: 1px solid var(--line-2);
+  background: var(--paper-2);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1.7;
+}
+.topic-chip--done {
+  background: var(--green-soft);
+  color: var(--green);
+  border-color: #c4d4c2;
+}
+/* Clickable variant inside the syllabus edit dialog */
+button.topic-chip {
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+button.topic-chip:hover {
+  border-color: var(--green);
+  box-shadow: 0 0 0 1px var(--green-soft);
+}
+button.topic-chip:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 1px;
 }
 /* ═══════════════════════════════════════════════════ TOASTS */
 /* Paper slips with a colored left rule — like a stamped chit. */
