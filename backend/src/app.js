@@ -35,11 +35,13 @@ app.set('trust proxy', 1);
 app.use(helmet()); // Sets secure HTTP headers
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || config.cors.allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
+    // Allowed origins (or same-origin/server-to-server requests with no Origin
+    // header) get the CORS headers; anything else is answered WITHOUT them.
+    // Passing an Error here instead would route every scanner/bot probe through
+    // the global error handler as a 500 "SERVER_ERROR" and log an [ERROR] line —
+    // noisy in production logs and misleading in the response body. Denying by
+    // omission is the standard behaviour: the browser blocks the response.
+    callback(null, !origin || config.cors.allowedOrigins.includes(origin));
   },
   credentials: true,
 }));

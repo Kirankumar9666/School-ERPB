@@ -19,6 +19,34 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # The suite runs against a real PostgreSQL database (the Prisma swap
+    # replaced the in-memory mock stores), so CI provides a throwaway one and
+    # applies the same migrations a deploy would. Without the service the job
+    # cannot pass — prisma requires DATABASE_URL and DIRECT_URL.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: schoolerp
+          POSTGRES_PASSWORD: schoolerp
+          POSTGRES_DB: schoolerp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # Local service container, so both the pooled and the direct URL are the
+      # same single-instance connection (schema.prisma reads both).
+      DATABASE_URL: postgresql://schoolerp:schoolerp@localhost:5432/schoolerp
+      DIRECT_URL: postgresql://schoolerp:schoolerp@localhost:5432/schoolerp
+      # Tests set NODE_ENV=test, so the development fallbacks would apply — CI
+      # uses explicit throwaway secrets anyway to keep the run warning-free.
+      JWT_SECRET: ci-only-secret-not-used-in-production
+      JWT_REFRESH_SECRET: ci-only-refresh-secret-not-used-in-production
+      LOG_LEVEL: warn
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -27,7 +55,15 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
+      - run: npx prisma migrate deploy
       - run: npm test
+      # Boots the API with NODE_ENV=production on a free port against the same
+      # database and asserts the production config path: fail-fast on missing
+      # secrets, quiet logs, RBAC/scoping, rate-limit headers, /health env.
+      # The rehearsal logs in as the seeded admin, so seed explicitly rather than
+      # depending on whatever state the last test file happened to leave behind.
+      - run: npm run db:seed
+      - run: npm run smoke:staging
 
   frontend:
     name: Frontend — lint + build
@@ -56,3 +92,8 @@ jobs:
       - uses: actions/checkout@v4
       - run: docker build -t school-erp-backend ./backend
       - run: docker build -t school-erp-frontend ./frontend
+      # Interpolates docker-compose.yml against the documented example env —
+      # every ${VAR:?...} required variable is present there, so a missing or
+      # misnamed variable (or a malformed compose edit) fails CI instead of
+      # failing the first real deploy.
+      - run: docker compose --env-file .env.docker.example config -q

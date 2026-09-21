@@ -1,13 +1,17 @@
-# School ERP portal — local/staging deployment stack.
+# School ERP portal — deployment stack (laptop / staging / production).
 #
 # Usage:
 #   cp .env.docker.example .env.docker    # then fill in the real secrets
 #   docker compose --env-file .env.docker up --build
 #
 # The web app is served by nginx on FRONTEND_PORT (default 8080) and proxies
-# /api to the backend service — same origin, so no CORS is involved. The
-# Postgres service is provisioned now so the upcoming Prisma migration can
-# adopt it without changing the deployment shape.
+# /api to the backend service — same origin, so no CORS is involved.
+#
+# The bundled `postgres` service below is only used when DATABASE_URL points at
+# it (the local/self-hosted case). On staging/production DATABASE_URL points at
+# Supabase instead, and the API is started with:
+#   docker compose --env-file .env.docker up -d --no-deps --build backend frontend
+# Migrations never run from these containers — see DEPLOYMENT.md §3.2.
 
 name: school-erp
 
@@ -41,8 +45,20 @@ services:
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env.docker}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?set JWT_REFRESH_SECRET in .env.docker}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080}
-      # Wired for the upcoming Prisma migration (postgres service above)
-      DATABASE_URL: postgres://${POSTGRES_USER:-schoolerp}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-schoolerp}
+      # Database — required, and the one value that differs per environment:
+      #   local stack  -> postgres://<POSTGRES_USER>:<POSTGRES_PASSWORD>@postgres:5432/<POSTGRES_DB>
+      #   staging/prod -> Supabase TRANSACTION pooler (port 6543) with
+      #                   ?pgbouncer=true&connection_limit=10&pool_timeout=20
+      # (Migrations are NOT run by this container — the production image ships
+      #  without the Prisma CLI. Release step: `npm run prisma:deploy` from a
+      #  trusted machine/CI with DIRECT_URL pointed at the session pooler.)
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env.docker (see .env.docker.example)}
+      # Request logging: prod default 'warn' = no per-request logs (LOG_LEVEL=debug
+      # turns on morgan 'combined' for temporary diagnosis only).
+      LOG_LEVEL: ${LOG_LEVEL:-warn}
+      # Global /api/v1 ceiling per client IP — raise for a whole school behind
+      # one NAT IP or for load tests.
+      API_RATE_LIMIT_MAX: ${API_RATE_LIMIT_MAX:-300}
     depends_on:
       postgres:
         condition: service_healthy

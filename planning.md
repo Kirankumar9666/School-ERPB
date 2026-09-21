@@ -264,6 +264,33 @@ School
 
 ---
 
+## 🚢 Operations & Deployment
+
+The full runbook lives in **`DEPLOYMENT.md`** (topology, required env vars,
+release order, monitoring, rollback, current verification status). Quick
+reference:
+
+| Task | Command |
+|------|---------|
+| Local stack | `cp .env.docker.example .env.docker && docker compose --env-file .env.docker up --build` |
+| Apply migrations (release step) | `cd backend && npm run prisma:deploy` |
+| Full test suite | `cd backend && npm test` |
+| Deployment smoke test (read-only) | `npm run smoke:staging -- --base-url https://<host>/api/v1` |
+| Production-path rehearsal (no host needed) | `cd backend && npm run smoke:staging` |
+
+- Secrets: `JWT_SECRET` / `JWT_REFRESH_SECRET` are **required** — the API
+  refuses to start in production without them (and compose refuses to
+  interpolate). `DATABASE_URL` is per-environment (bundled Postgres vs. the
+  Supabase transaction pooler, which also needs `DIRECT_URL` for migrations).
+- CI (`.github/workflows/ci.yml`) runs the suite against a throwaway
+  `postgres:16`, then the production-boot rehearsal, then both Docker image
+  builds and a `docker compose config` interpolation check.
+- Production defaults favour silence and safety: `LOG_LEVEL=warn` (no
+  per-request logs), `/health` exposed through nginx for external monitoring,
+  and `/api/v1` rate limiting (`API_RATE_LIMIT_MAX`, default 300/15 min/IP).
+
+---
+
 ## Verification Plan
 
 | Area                | Verification Method                                  |
@@ -275,7 +302,8 @@ School
 | UI/UX               | Manual review + screenshots on Android & iOS         |
 | Performance         | API response time < 500ms under normal load          |
 | Security Audit      | Run npm audit; check for exposed secrets             |
+| Deployment          | CI (migrate + suite + prod rehearsal + image builds) and the read-only `smoke:staging` gate against the deployed URL — see DEPLOYMENT.md |
 
 ---
 
-*Last Updated: 2026-09-10 | Author: Agent*
+*Last Updated: 2026-09-21 | Author: Agent*
