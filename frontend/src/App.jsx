@@ -21,7 +21,6 @@ const StudentMarks = lazy(() => import('./pages/student/StudentMarks'))
 const StudentTimetable = lazy(() => import('./pages/student/StudentTimetable'))
 const StudentSyllabus = lazy(() => import('./pages/student/StudentSyllabus'))
 const StudentCirculars = lazy(() => import('./pages/student/StudentCirculars'))
-const StudentHolidays = lazy(() => import('./pages/student/StudentHolidays'))
 const StudentAchievements = lazy(() => import('./pages/student/StudentAchievements'))
 
 // Employee pages
@@ -100,7 +99,6 @@ export default function App() {
             <Route path="/student/timetable" element={<StudentTimetable />} />
             <Route path="/student/syllabus" element={<StudentSyllabus />} />
             <Route path="/student/circulars" element={<StudentCirculars />} />
-            <Route path="/student/holidays" element={<StudentHolidays />} />
             <Route path="/student/achievements" element={<StudentAchievements />} />
           </Route>
 

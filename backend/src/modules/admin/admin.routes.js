@@ -45,6 +45,7 @@ const {
   loadTakenUsernames,
   createStudentAccount,
 } = require('../../services/studentAccounts');
+const { sendDocumentPdf } = require('../../services/documents');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -675,6 +676,50 @@ router.get('/employees', async (req, res) => {
   return sendSuccess(res, rows.map(mapEmployee));
 });
 
+/**
+ * GET /api/v1/admin/employees/:id — one employee with their CURRENT salary
+ * structure.
+ *
+ * The employee record carries a stored default salary structure, but those
+ * columns can legally be zeros: a wage can be worked out on the Payroll screen
+ * instead, which writes per-month PayrollRecord rows and never touches the
+ * employee's default columns. The Edit Employee form must prefill the same
+ * figures Payroll displays, so `salaryStructure` resolves the same way the
+ * Payroll page's own editor does — the latest saved payroll month first, the
+ * stored default structure only when no month exists. Everything comes from
+ * real rows; nothing is derived from constants or hardcoded values.
+ */
+router.get('/employees/:id', async (req, res) => {
+  const employee = await prisma.employee.findUnique({ where: { id: req.params.id }, include: EMPLOYEE_INCLUDE });
+  if (!employee) return sendError(res, 'Employee not found', 404, 'NOT_FOUND');
+
+  const latest = await prisma.payrollRecord.findFirst({
+    where: { employeeId: employee.id },
+    orderBy: { month: 'desc' },
+    select: {
+      basicPay: true, hra: true, transportAllowance: true, medicalAllowance: true,
+      providentFund: true, professionalTax: true, tds: true,
+    },
+  });
+
+  // All seven components are non-null Ints on both models, so a plain logical
+  // pick between the latest month and the stored default is unambiguous.
+  const src = latest ?? employee;
+  return sendSuccess(res, {
+    ...mapEmployee(employee),
+    salaryStructure: {
+      basicPay: src.basicPay,
+      hra: src.hra,
+      transportAllowance: src.transportAllowance,
+      medicalAllowance: src.medicalAllowance,
+      providentFund: src.providentFund,
+      professionalTax: src.professionalTax,
+      tds: src.tds,
+      source: latest ? 'payroll' : 'default',
+    },
+  });
+});
+
 /** POST /api/v1/admin/employees — create employee */
 router.post('/employees', async (req, res) => {
   const parsed = employeeSchema.safeParse(req.body);
@@ -1065,6 +1110,12 @@ router.post('/attendance', async (req, res) => {
   if (entityType === 'student') {
     const student = await prisma.student.findUnique({ where: { id: entityId } });
     if (!student) return sendError(res, 'Student not found', 404, 'NOT_FOUND');
+
+    // Enrollment gate (same rule as the day rosters): attendance cannot be
+    // recorded for a day before the student was enrolled.
+    if (student.enrolledAt > day) {
+      return sendError(res, `${student.name} was not enrolled on ${date}`, 400, 'VALIDATION_ERROR');
+    }
 
     await prisma.studentAttendance.upsert({
       where: { studentId_date: { studentId: entityId, date: day } },
@@ -1752,9 +1803,10 @@ router.delete('/achievements/:id', async (req, res) => {
 /* ---------- Documents ---------- */
 
 /**
- * Document records are metadata (category + file name) — the uploaded PDF is
- * validated server-side and then discarded; no bytes are persisted. The 5 MB
- * cap matches every other upload in this API.
+ * Document uploads: the PDF is validated server-side (extension + MIME +
+ * `%PDF-` magic bytes) and its bytes are persisted on the row (`data`), so
+ * the download endpoints can serve the real file back. The 5 MB cap matches
+ * every other upload in this API.
  */
 const documentUpload = multer({
   storage: multer.memoryStorage(),
@@ -1818,6 +1870,7 @@ router.post('/employees/:id/documents', documentUpload.single('file'), documentU
       employeeId: employee.id,
       type: parsed.data.type,
       fileName: docNameFrom(req.file),
+      data: req.file.buffer,
     },
   });
   return sendSuccess(res, {
@@ -1828,10 +1881,15 @@ router.post('/employees/:id/documents', documentUpload.single('file'), documentU
   }, 'Document uploaded', 201);
 });
 
-/** GET /api/v1/admin/documents — flattened list with employee names, newest first */
+/** GET /api/v1/admin/documents — flattened list with employee names, newest first.
+ * Explicit column select: `data` (the stored PDF bytes) must never ship in a
+ * list response. */
 router.get('/documents', async (req, res) => {
   const rows = await prisma.employeeDocument.findMany({
-    include: { employee: { select: { name: true } } },
+    select: {
+      id: true, type: true, fileName: true, uploadedAt: true, employeeId: true,
+      employee: { select: { name: true } },
+    },
     orderBy: { uploadedAt: 'desc' },
   });
   return sendSuccess(res, rows.map((d) => ({
@@ -1855,6 +1913,22 @@ router.delete('/documents/:id', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/v1/admin/documents/:docId/download — serve the stored PDF of one
+ * employee document record. The router's admin guard applies; the lookup is
+ * by unique document id, so a missing id is a plain 404. Rows created before
+ * the bytes column existed have no stored file → 404 NO_FILE.
+ */
+router.get('/documents/:docId/download', async (req, res) => {
+  const doc = await prisma.employeeDocument.findUnique({
+    where: { id: req.params.docId },
+    select: { fileName: true, data: true },
+  });
+  if (!doc) return sendError(res, 'Document not found', 404, 'NOT_FOUND');
+  if (!doc.data) return sendError(res, 'No stored file for this record (metadata-only)', 404, 'NO_FILE');
+  return sendDocumentPdf(res, doc);
+});
+
 /* ---------- Student documents (mirror of the employee documents surface) ---------- */
 
 /**
@@ -1867,6 +1941,7 @@ router.get('/students/:id/documents', async (req, res) => {
 
   const docs = await prisma.studentDocument.findMany({
     where: { studentId: student.id },
+    select: { id: true, type: true, fileName: true, uploadedAt: true, studentId: true },
     orderBy: { uploadedAt: 'desc' },
   });
   return sendSuccess(res, docs.map((d) => ({
@@ -1893,6 +1968,7 @@ router.post('/students/:id/documents', documentUpload.single('file'), documentUp
       studentId: student.id,
       type: parsed.data.type,
       fileName: docNameFrom(req.file),
+      data: req.file.buffer,
     },
   });
   return sendSuccess(res, {
@@ -1917,6 +1993,20 @@ router.delete('/student-documents/:docId', async (req, res) => {
     if (err.code === 'P2025') return sendError(res, 'Document not found', 404, 'NOT_FOUND');
     throw err;
   }
+});
+
+/**
+ * GET /api/v1/admin/student-documents/:docId/download — serve the stored PDF
+ * of one student document record (mirror of the employee download above).
+ */
+router.get('/student-documents/:docId/download', async (req, res) => {
+  const doc = await prisma.studentDocument.findUnique({
+    where: { id: req.params.docId },
+    select: { fileName: true, data: true },
+  });
+  if (!doc) return sendError(res, 'Document not found', 404, 'NOT_FOUND');
+  if (!doc.data) return sendError(res, 'No stored file for this record (metadata-only)', 404, 'NO_FILE');
+  return sendDocumentPdf(res, doc);
 });
 
 /* ---------- Users / Password reset ---------- */

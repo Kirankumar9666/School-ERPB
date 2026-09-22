@@ -15,6 +15,13 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  // FormData must not be sent as JSON: the instance default above would make
+  // axios serialize FormData into `{"file":{}}`, so the backend never receives
+  // the file. Drop the header and let axios set the multipart boundary.
+  if (config.data instanceof FormData) {
+    delete config.headers['Content-Type'];
+    delete config.headers['content-type'];
+  }
   return config;
 });
 

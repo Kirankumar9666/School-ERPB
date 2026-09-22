@@ -18,6 +18,7 @@ const {
 } = require('../../services/mappers');
 const { summarizeAttendance } = require('../../utils/attendance');
 const { buildPayslipPdf, payslipFilename } = require('../../services/payslip');
+const { sendDocumentPdf } = require('../../services/documents');
 const {
   bulkAttendanceSchema,
   loadAttendanceRoster,
@@ -213,6 +214,7 @@ router.get('/:id/documents', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), asyn
 
   const docs = await prisma.employeeDocument.findMany({
     where: { employeeId: id },
+    select: { id: true, type: true, fileName: true, uploadedAt: true },
     orderBy: { uploadedAt: 'desc' },
   });
   return sendSuccess(res, docs.map((d) => ({
@@ -221,6 +223,27 @@ router.get('/:id/documents', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), asyn
     fileName: d.fileName,
     uploadedAt: toIso(d.uploadedAt),
   })));
+});
+
+/**
+ * GET /api/v1/employees/:id/documents/:docId/download — serve the stored PDF
+ * of one of THIS employee's document records. Same access rules as the list
+ * above (the employee themself or admin), and the document must belong to the
+ * :id in the path — another employee's doc id is a plain 404. Rows without
+ * stored bytes (metadata-only legacy records) → 404 NO_FILE.
+ */
+router.get('/:id/documents/:docId/download', requireRole([ROLES.ADMIN, ...EMPLOYEE_ROLES]), async (req, res) => {
+  const { id, docId } = req.params;
+  if (!canAccessEmployee(req, id)) return sendError(res, 'Access denied', 403, 'FORBIDDEN');
+
+  const doc = await prisma.employeeDocument.findFirst({
+    where: { id: docId, employeeId: id },
+    select: { fileName: true, data: true },
+  });
+  if (!doc) return sendError(res, 'Document not found', 404, 'NOT_FOUND');
+  if (!doc.data) return sendError(res, 'No stored file for this record (metadata-only)', 404, 'NO_FILE');
+
+  return sendDocumentPdf(res, doc);
 });
 
 /* ---------- Teacher attendance marking (Mark Attendance tab) ----------

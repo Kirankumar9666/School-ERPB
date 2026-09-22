@@ -118,6 +118,61 @@ test('employees: invalid role → 400', async () => {
   assert.equal(res.status, 400);
 });
 
+/* The seven salary components — same keys on the Employee (stored default),
+   PayrollRecord (per-month wage) and the edit forms. */
+const SALARY_KEYS = ['basicPay', 'hra', 'transportAllowance', 'medicalAllowance', 'providentFund', 'professionalTax', 'tds'];
+const salaryOf = (o) => Object.fromEntries(SALARY_KEYS.map((k) => [k, o[k]]));
+
+test('employees: GET /:id resolves salaryStructure from the latest payroll month', async () => {
+  const prisma = require('../src/services/prisma');
+  // emp-001 has seeded payroll months while its stored default columns are
+  // zeros — precisely the case the Edit Employee modal must prefill from.
+  const stored = await prisma.employee.findUnique({
+    where: { id: 'emp-001' }, select: Object.fromEntries(SALARY_KEYS.map((k) => [k, true])),
+  });
+  const latest = await prisma.payrollRecord.findFirst({
+    where: { employeeId: 'emp-001' }, orderBy: { month: 'desc' },
+    select: Object.fromEntries(SALARY_KEYS.map((k) => [k, true])),
+  });
+  assert.ok(latest, 'emp-001 has a saved payroll month to resolve from');
+
+  const res = await request(ctx.base, '/admin/employees/emp-001', { token: admin.accessToken });
+  assert.equal(res.status, 200);
+  const detail = res.body.data;
+  assert.equal(detail.id, 'emp-001');
+  assert.equal(detail.salaryStructure.source, 'payroll');
+
+  // The form must prefill the real saved wage, not the zeros on the default
+  // columns — asserted against live rows, never fixed numbers.
+  assert.deepEqual(salaryOf(detail.salaryStructure), latest, 'salaryStructure = latest saved payroll month');
+  assert.notDeepEqual(salaryOf(detail.salaryStructure), stored, '…which is not the stored default columns');
+
+  // The flat stored columns remain on the payload, unchanged.
+  assert.deepEqual(salaryOf(detail), stored);
+});
+
+test('employees: GET /:id falls back to the stored default columns without payroll months', async () => {
+  const prisma = require('../src/services/prisma');
+  const stored = await prisma.employee.findUnique({
+    where: { id: 'emp-002' }, select: Object.fromEntries(SALARY_KEYS.map((k) => [k, true])),
+  });
+  const months = await prisma.payrollRecord.count({ where: { employeeId: 'emp-002' } });
+  assert.equal(months, 0, 'emp-002 has no payroll months — the fallback path');
+
+  const res = await request(ctx.base, '/admin/employees/emp-002', { token: admin.accessToken });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.data.salaryStructure.source, 'default');
+  assert.deepEqual(salaryOf(res.body.data.salaryStructure), stored, 'stored default columns when no month exists');
+});
+
+test('employees: GET /:id unknown id → 404, non-admin → 403', async () => {
+  const missing = await request(ctx.base, '/admin/employees/emp-999', { token: admin.accessToken });
+  assert.equal(missing.status, 404);
+
+  const forbidden = await request(ctx.base, '/admin/employees/emp-001', { token: student.accessToken });
+  assert.equal(forbidden.status, 403);
+});
+
 test('attendance marking: upsert + month filter', async () => {
   const marked = await request(ctx.base, '/admin/attendance', {
     method: 'POST',

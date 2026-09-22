@@ -3,7 +3,7 @@ import { Bell, Megaphone } from 'lucide-react';
 import api from '../../services/api';
 
 /**
- * School Circulars — announcement cards, tap to expand full details.
+ * Student Announcements — announcement cards, tap to expand full details.
  */
 export default function StudentCirculars() {
   const [announcements, setAnnouncements] = useState([]);
@@ -21,14 +21,14 @@ export default function StudentCirculars() {
   return (
     <div className="page fade-in">
       <div className="page-header">
-        <div className="page-title">School Circulars</div>
-        <div className="page-subtitle">Announcements & notices — tap to expand</div>
+        <div className="page-title">Announcements</div>
+        <div className="page-subtitle">School announcements & notices — tap to expand</div>
       </div>
 
       {announcements.length === 0 ? (
         <div className="empty-state">
           <Bell size={40} />
-          No circulars for your role right now.
+          No announcements for your role right now.
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-md)' }}>

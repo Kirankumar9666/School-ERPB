@@ -45,12 +45,22 @@ const bulkAttendanceSchema = z.object({
  * kind 'student' → a Class row (groupKey = class id), kind 'employee' → every
  * employee sharing a designation (groupKey = the designation string).
  * Returns { label, members } or null when the group does not exist.
+ *
+ * For students, `date` is the enrollment gate: only students whose enrolledAt
+ * is on/before that day belong to that day's roster, so a student added today
+ * never appears for earlier dates.
  */
-const attendanceGroup = async (kind, groupKey) => {
+const attendanceGroup = async (kind, groupKey, date) => {
   if (kind === 'student') {
     const klass = await prisma.class.findUnique({
       where: { id: groupKey },
-      include: { students: { orderBy: { rollNumber: 'asc' } } },
+      include: {
+        students: {
+          // Enrollment gate — inclusive: enrolled on the requested day = listed.
+          where: date ? { enrolledAt: { lte: apiDate(date) } } : undefined,
+          orderBy: { rollNumber: 'asc' },
+        },
+      },
     });
     if (!klass) return null;
     return { label: `${klass.grade} - Class ${klass.section}`, members: klass.students };
@@ -82,7 +92,7 @@ const confirmationPayload = (row) => {
  * @param {string} date 'YYYY-MM-DD'
  */
 const loadAttendanceRoster = async (kind, groupKey, date) => {
-  const group = await attendanceGroup(kind, groupKey);
+  const group = await attendanceGroup(kind, groupKey, date);
   if (!group) return null;
 
   const day = apiDate(date);
@@ -141,7 +151,7 @@ const loadAttendanceRoster = async (kind, groupKey, date) => {
 const saveBulkAttendance = async ({ kind, groupKey, date, entries, override, markedBy }) => {
   const day = apiDate(date);
 
-  const group = await attendanceGroup(kind, groupKey);
+  const group = await attendanceGroup(kind, groupKey, date);
   if (!group) {
     return {
       ok: false,
@@ -154,8 +164,26 @@ const saveBulkAttendance = async ({ kind, groupKey, date, entries, override, mar
   // Every entry must belong to this group — rejects stale/foreign ids before
   // anything is written (atomicity guard).
   const memberIds = new Set(group.members.map((m) => m.id));
-  const unknown = entries.filter((e) => !memberIds.has(e.entityId)).map((e) => e.entityId);
-  if (unknown.length) {
+  const unknownEntries = entries.filter((e) => !memberIds.has(e.entityId));
+  if (unknownEntries.length) {
+    const unknown = unknownEntries.map((e) => e.entityId);
+    // A student who is in the class but not yet enrolled on this date is a
+    // distinct mistake from a foreign id — report it precisely, and never let
+    // the roster gate be bypassed with a direct request.
+    if (kind === 'student') {
+      const notEnrolled = await prisma.student.findMany({
+        where: { id: { in: unknown }, classId: groupKey },
+        select: { name: true, id: true },
+      });
+      if (notEnrolled.length) {
+        return {
+          ok: false,
+          status: 400,
+          code: 'VALIDATION_ERROR',
+          message: `Students not enrolled on ${date}: ${notEnrolled.map((s) => s.name).join(', ')}`,
+        };
+      }
+    }
     return {
       ok: false,
       status: 400,

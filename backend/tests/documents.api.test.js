@@ -180,5 +180,78 @@ test('employee documents: existing surface still works end to end', async () => 
   assert.equal(emp1After.body.data.length, 4);
 });
 
+test('document downloads: stored bytes round-trip and stay access-scoped', async () => {
+  /** Binary GET — downloads aren't JSON, so the raw body + headers are kept */
+  const raw = async (path, token) => {
+    const res = await fetch(`${ctx.base}${path}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    return { status: res.status, headers: res.headers, buf: Buffer.from(await res.arrayBuffer()) };
+  };
+
+  // Anonymous and wrong-role callers are rejected on every download surface
+  for (const path of ['/admin/documents/doc-001/download', '/admin/student-documents/sdoc-001/download']) {
+    assert.equal((await raw(path)).status, 401);
+    assert.equal((await raw(path, student.accessToken)).status, 403);
+    assert.equal((await raw(path, teacher.accessToken)).status, 403);
+  }
+  assert.equal((await raw('/employees/emp-001/documents/doc-001/download')).status, 401);
+  assert.equal((await raw('/employees/emp-001/documents/doc-001/download', student.accessToken)).status, 403);
+
+  // Seeded employee doc: the teacher downloads one of their OWN records
+  const own = await raw('/employees/emp-001/documents/doc-001/download', teacher.accessToken);
+  assert.equal(own.status, 200);
+  assert.equal(own.headers.get('content-type'), 'application/pdf');
+  assert.equal(own.headers.get('content-disposition'), 'attachment; filename="appointment_letter.pdf"');
+  assert.ok(String(own.headers.get('cache-control')).includes('no-store'));
+  assert.ok(own.buf.length > 300, 'seeded demo PDF has real content');
+  assert.equal(own.buf.subarray(0, 5).toString('latin1'), '%PDF-');
+
+  // Uploaded student doc: the bytes survive the round trip exactly
+  const created = await upload(ctx.base, admin.accessToken,
+    '/admin/students/stu-002/documents', PDF_BYTES, 'roundtrip.pdf', 'application/pdf', 'Other');
+  assert.equal(created.status, 201);
+  const dl = await raw(`/admin/student-documents/${created.body.data.id}/download`, admin.accessToken);
+  assert.equal(dl.status, 200);
+  assert.equal(dl.headers.get('content-type'), 'application/pdf');
+  assert.equal(dl.headers.get('content-disposition'), 'attachment; filename="roundtrip.pdf"');
+  assert.ok(dl.buf.equals(Buffer.from(PDF_BYTES, 'utf8')));
+
+  // Same bytes through the employees surface (admin fetching for emp-002)
+  const empDoc = await upload(ctx.base, admin.accessToken,
+    '/admin/employees/emp-002/documents', PDF_BYTES, 'roundtrip_emp.pdf', 'application/pdf', 'Other');
+  assert.equal(empDoc.status, 201);
+  const viaEmployees = await raw(`/employees/emp-002/documents/${empDoc.body.data.id}/download`, admin.accessToken);
+  assert.equal(viaEmployees.status, 200);
+  assert.ok(viaEmployees.buf.equals(Buffer.from(PDF_BYTES, 'utf8')));
+
+  // Scoping: emp-001 naming emp-002's doc id on the employees route → 404
+  const foreign = await raw(`/employees/emp-001/documents/${empDoc.body.data.id}/download`, teacher.accessToken);
+  assert.equal(foreign.status, 404);
+
+  // Unknown ids on all three surfaces
+  assert.equal((await raw('/admin/documents/doc-999/download', admin.accessToken)).status, 404);
+  assert.equal((await raw('/admin/student-documents/sdoc-999/download', admin.accessToken)).status, 404);
+  assert.equal((await raw('/employees/emp-001/documents/doc-999/download', teacher.accessToken)).status, 404);
+
+  // Metadata-only row (created before the bytes column existed) → NO_FILE
+  const prisma = require('../src/services/prisma');
+  await prisma.studentDocument.create({
+    data: { id: 'sdoc-metaonly', studentId: 'stu-002', type: 'Legacy Record', fileName: 'pre_migration_record' },
+  });
+  const metaOnly = await raw('/admin/student-documents/sdoc-metaonly/download', admin.accessToken);
+  assert.equal(metaOnly.status, 404);
+  assert.equal(JSON.parse(metaOnly.buf.toString('utf8')).code, 'NO_FILE');
+
+  // Lists stay metadata-only — the byte column never ships in a list response
+  const adminList = await request(ctx.base, '/admin/documents', { token: admin.accessToken });
+  assert.ok(adminList.body.data.length > 0);
+  assert.ok(adminList.body.data.every((d) => !('data' in d)));
+  const stuList = await request(ctx.base, '/admin/students/stu-001/documents', { token: admin.accessToken });
+  assert.ok(stuList.body.data.every((d) => !('data' in d)));
+  const empList = await request(ctx.base, '/employees/emp-001/documents', { token: teacher.accessToken });
+  assert.ok(empList.body.data.every((d) => !('data' in d)));
+});
+
 test('teardown — stop server', async () => { await stopServer(ctx.server); });
 

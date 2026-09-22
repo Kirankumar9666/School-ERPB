@@ -27,8 +27,7 @@ const NAV_CONFIG = {
       {
         title: 'School',
         items: [
-          { to: '/student/circulars',   icon: <Bell size={16} />,            label: 'Circulars' },
-          { to: '/student/holidays',    icon: <PartyPopper size={16} />,     label: 'Holidays' },
+          { to: '/student/circulars',   icon: <Bell size={16} />,            label: 'Announcements' },
         ],
       },
     ],
@@ -55,7 +54,7 @@ EMPLOYEE_ROLES.forEach((role) => {
       {
         title: 'School',
         items: [
-          { to: '/employee/announcements',icon: <Bell size={16} />,            label: 'Notices' },
+          { to: '/employee/announcements',icon: <Bell size={16} />,            label: 'Announcements' },
           { to: '/employee/documents',    icon: <FileText size={16} />,        label: 'Documents' },
         ],
       },

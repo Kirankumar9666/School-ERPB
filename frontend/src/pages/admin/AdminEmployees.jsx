@@ -79,21 +79,32 @@ export default function AdminEmployees() {
     setModal({ mode: 'create' });
   };
 
-  const openEdit = (e) => {
+  const openEdit = async (e) => {
+    // The list row carries the employee's stored default salary columns — which
+    // can be zeros when a wage was worked out on the Payroll screen (that page
+    // writes per-month PayrollRecord rows, not the default columns). Fetch the
+    // single-employee detail so the form prefills the same figures Payroll
+    // shows: salaryStructure = the latest saved payroll month, else the stored
+    // default. The list row is used as-is if the detail fetch fails.
+    let src = e;
+    try {
+      src = (await api.get(`/admin/employees/${e.id}`)).data.data;
+    } catch { /* the list row already carries every editable field */ }
+    const sal = src.salaryStructure || src;
     const blank = blankForm(options.enums);
     setForm({
-      name: e.name, employeeId: e.employeeId || '', gender: e.gender || blank.gender,
-      department: e.department || '', designation: e.designation || '', role: e.role || blank.role,
-      employmentType: e.employmentType || blank.employmentType, dateOfJoining: e.dateOfJoining || '',
-      mobile: contactToField(e.mobile), email: e.email || '', qualification: e.qualification || '',
-      experience: e.experience || '', dob: e.dob || '', bloodGroup: e.bloodGroup || '',
-      emergencyContact: contactToField(e.emergencyContact), status: e.status || blank.status, address: e.address || '',
-      basicPay: e.basicPay ?? 0, hra: e.hra ?? 0, transportAllowance: e.transportAllowance ?? 0,
-      medicalAllowance: e.medicalAllowance ?? 0, providentFund: e.providentFund ?? 0,
-      professionalTax: e.professionalTax ?? 0, tds: e.tds ?? 0,
+      name: src.name, employeeId: src.employeeId || '', gender: src.gender || blank.gender,
+      department: src.department || '', designation: src.designation || '', role: src.role || blank.role,
+      employmentType: src.employmentType || blank.employmentType, dateOfJoining: src.dateOfJoining || '',
+      mobile: contactToField(src.mobile), email: src.email || '', qualification: src.qualification || '',
+      experience: src.experience || '', dob: src.dob || '', bloodGroup: src.bloodGroup || '',
+      emergencyContact: contactToField(src.emergencyContact), status: src.status || blank.status, address: src.address || '',
+      basicPay: sal.basicPay ?? 0, hra: sal.hra ?? 0, transportAllowance: sal.transportAllowance ?? 0,
+      medicalAllowance: sal.medicalAllowance ?? 0, providentFund: sal.providentFund ?? 0,
+      professionalTax: sal.professionalTax ?? 0, tds: sal.tds ?? 0,
     });
     setError('');
-    setModal({ mode: 'edit', employee: e });
+    setModal({ mode: 'edit', employee: src });
   };
 
   // Destructive-action confirmation (ConfirmModal replaces window.confirm)

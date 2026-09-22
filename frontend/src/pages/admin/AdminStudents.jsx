@@ -51,6 +51,10 @@ export default function AdminStudents() {
   const [rowRefs] = useState(() => new Map()); // class key → row element, for focus return
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // Bulk-upload error lives in its own state so it can never leak into the
+  // Bulk Add modal on open — it is only ever set by handleBulk (a real,
+  // failed submit attempt) and cleared when the modal opens or a file is chosen.
+  const [bulkError, setBulkError] = useState('');
   // Reset-password modal: the user account of the student being reset.
   // Null when the student has no account (the button only renders when userId exists).
   const [resettingUser, setResettingUser] = useState(null);
@@ -201,9 +205,9 @@ export default function AdminStudents() {
   };
 
   const handleBulk = async (file) => {
-    setError('');
+    setBulkError(''); // choosing a file always clears any previous error
     if (!file) {
-      setError('Choose a .csv or .xlsx file first.');
+      setBulkError('Choose a .csv or .xlsx file first.');
       return;
     }
     setSaving(true);
@@ -215,7 +219,8 @@ export default function AdminStudents() {
       setModal(null);
       await load();
     } catch (err) {
-      setError(err.response?.data?.message || 'Bulk upload failed.');
+      // Only place the bulk banner is ever populated — a real failed attempt.
+      setBulkError(err.response?.data?.message || 'Bulk upload failed.');
     } finally {
       setSaving(false);
     }
@@ -245,7 +250,7 @@ export default function AdminStudents() {
         <div style={{ display: 'flex', gap: 'var(--sp-sm)' }}>
           <button
             className="btn btn-secondary"
-            onClick={() => { setError(''); setModal({ mode: 'bulk' }); }}
+            onClick={() => { setBulkError(''); setModal({ mode: 'bulk' }); }}
           >
             <Upload size={16} /> Bulk Add
           </button>
@@ -451,7 +456,7 @@ export default function AdminStudents() {
             <button className="btn btn-secondary" onClick={() => setModal(null)}>Cancel</button>
           }
         >
-          {error && <div className="login-error" style={{ marginBottom: 'var(--sp-md)' }}>{error}</div>}
+          {bulkError && <div className="login-error" style={{ marginBottom: 'var(--sp-md)' }}>{bulkError}</div>}
           <div className="form-group">
             <label className="form-label">Upload a spreadsheet (.csv or .xlsx)</label>
             <input

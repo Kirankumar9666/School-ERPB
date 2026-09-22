@@ -13,7 +13,7 @@ const SHORTCUTS = [
   { to: '/employee/payroll',      icon: <DollarSign size={22} />,           label: 'Payroll',          sub: 'Salary details' },
   { to: '/employee/timetable',    icon: <Clock size={22} />,                label: 'Timetable',        sub: 'Teaching schedule' },
   { to: '/employee/classes',      icon: <BookMarked size={22} />,           label: 'My Classes',       sub: 'Assigned classes' },
-  { to: '/employee/announcements',icon: <Bell size={22} />,                 label: 'Notices',          sub: 'Announcements' },
+  { to: '/employee/announcements',icon: <Bell size={22} />,                 label: 'Announcements',    sub: 'School updates' },
   { to: '/employee/documents',    icon: <FileText size={22} />,             label: 'Documents',        sub: 'Files & records' },
 ];
 

@@ -3,7 +3,7 @@ import { Bell, Megaphone } from 'lucide-react';
 import api from '../../services/api';
 
 /**
- * Employee Notices — school announcements targeted at the employee's role.
+ * Employee Announcements — school announcements targeted at the employee's role.
  */
 export default function EmployeeAnnouncements() {
   const [announcements, setAnnouncements] = useState([]);
@@ -21,8 +21,8 @@ export default function EmployeeAnnouncements() {
   return (
     <div className="page fade-in">
       <div className="page-header">
-        <div className="page-title">Announcements / Notices</div>
-        <div className="page-subtitle">Staff meetings, exams, events & circulars</div>
+        <div className="page-title">Announcements</div>
+        <div className="page-subtitle">Staff meetings, exams, events & announcements</div>
       </div>
 
       {announcements.length === 0 ? (

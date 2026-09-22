@@ -140,6 +140,14 @@ model Student {
   address         String?
   bloodGroup      String?
   dob             DateTime? @db.Date
+  // Enrollment date — the day the student was added to this school/class. The
+  // attendance rosters show a student only from this date on (inclusive), so a
+  // student created today never appears for earlier dates. Set at creation (day
+  // of), never rewritten by edits. createdAt is NOT the reliable signal here —
+  // the seed recreates fixture rows and rewrites createdAt for them — so this
+  // explicit column is backfilled for the mock-store fixtures from their
+  // admissionYear (see migration 20260922120000_student_enrolled_at).
+  enrolledAt      DateTime   @default(now()) @db.Date
   attendance      StudentAttendance[]
   marks           MarksEntry[]
   achievements    Achievement[]
@@ -344,6 +352,7 @@ model EmployeeDocument {
   employee   Employee @relation(fields: [employeeId], references: [id])
   type       String
   fileName   String
+  data       Bytes? // stored PDF bytes (null = metadata-only legacy record)
   uploadedAt DateTime @default(now())
 
   @@index([employeeId])
@@ -355,6 +364,7 @@ model StudentDocument {
   student    Student  @relation(fields: [studentId], references: [id])
   type       String
   fileName   String
+  data       Bytes? // stored PDF bytes (null = metadata-only legacy record)
   uploadedAt DateTime @default(now())
 
   @@index([studentId])

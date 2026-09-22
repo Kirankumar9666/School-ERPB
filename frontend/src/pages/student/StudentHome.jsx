@@ -19,7 +19,7 @@ const OVERVIEW_CARDS = [
   { to: '/student/syllabus',     icon: <BookOpen size={22} />,     label: 'Syllabus',     sub: 'Class progress',      color: 'var(--clr-accent)',   bg: 'var(--tint-slate)' },
   { to: '/student/marks',        icon: <ClipboardList size={22} />,label: 'Marks',        sub: 'Progress card',       color: 'var(--clr-success)',  bg: 'var(--tint-green)' },
   { to: '/student/timetable',    icon: <Clock size={22} />,        label: 'Time Table',   sub: 'Daily schedule',      color: 'var(--clr-warning)',  bg: 'var(--tint-gold)' },
-  { to: '/student/circulars',    icon: <Bell size={22} />,          label: 'Circulars',    sub: 'Announcements',       color: 'var(--clr-primary-h)',bg: 'var(--tint-oxblood)' },
+  { to: '/student/circulars',    icon: <Bell size={22} />,          label: 'Announcements', sub: 'School updates',      color: 'var(--clr-primary-h)',bg: 'var(--tint-oxblood)' },
   { to: '/student/achievements', icon: <Trophy size={22} />,        label: 'Achievements', sub: 'Awards & certs',      color: 'var(--clr-warning)',  bg: 'var(--tint-gold)' },
 ];
 
@@ -111,7 +111,7 @@ export default function StudentHome() {
         </div>
         <div className="stat-card">
           <div className="stat-icon stat-icon-primary"><Bell size={22} /></div>
-          <div><div className="stat-value">{dash(stats?.newCirculars)}</div><div className="stat-label">New Circulars</div></div>
+          <div><div className="stat-value">{dash(stats?.newCirculars)}</div><div className="stat-label">New Announcements</div></div>
         </div>
         <div className="stat-card">
           <div className="stat-icon stat-icon-success"><PartyPopper size={22} /></div>
