@@ -1095,53 +1095,104 @@
 .att-note.ok { border-left-color: var(--green); }
 .att-note.locked { border-left-color: var(--gold); }
 
-/* Live absent/present summary line */
+/* Live present/absent stat pills */
 .att-summary {
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--ink-2);
-  font-variant-numeric: tabular-nums;
-  margin-bottom: var(--sp-sm);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sm);
+  margin-bottom: var(--sp-md);
 }
+.att-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 13px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--line-2);
+  background: var(--paper-2);
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+}
+.att-pill b { font-size: 13px; font-weight: 700; color: var(--ink); }
+/* Absent alert — stays neutral while the count is 0, red-tinted the moment
+   at least one student is marked absent. */
+.att-pill.absent.alert {
+  background: var(--red-soft);
+  border-color: var(--red);
+  color: var(--red);
+}
+.att-pill.absent.alert b { color: var(--red); }
 
-/* Roster rows */
+/* Roster rows — initials avatar | identity | segmented status */
 .att-roster { display: flex; flex-direction: column; margin-bottom: var(--sp-lg); }
 .att-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--sp-md);
-  padding: 10px 2px;
+  padding: 9px 2px;
   border-bottom: 1px solid var(--line);
 }
 .att-row:last-child { border-bottom: none; }
 
-/* Absent toggle pill — outline when present, light-red fill when absent */
-.att-toggle {
+/* Initials avatar — accent-tinted circle, same treatment as profile cards */
+.att-avatar {
   flex: 0 0 auto;
-  min-width: 84px;
-  padding: 5px 14px;
-  border-radius: var(--r-full);
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--oxblood-soft);
+  border: 1px solid #ddc0b4;
+  color: var(--oxblood);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* Identity block */
+.att-member { flex: 1 1 auto; min-width: 0; }
+.att-member-name {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.att-name { font-weight: 600; }
+.att-roll { font-size: 12.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.att-member-meta { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+
+/* Present/Absent two-segment toggle — the active segment is filled, the other
+   stays neutral, so every student's current status reads at a glance. */
+.att-seg {
+  flex: 0 0 auto;
+  display: inline-flex;
   border: 1px solid var(--line-2);
+  border-radius: var(--r-full);
+  overflow: hidden;
+  background: var(--card);
+}
+.att-seg-btn {
+  border: none;
   background: transparent;
-  color: var(--ink-2);
+  color: var(--ink-3);
   font-family: inherit;
   font-size: 12.5px;
   font-weight: 500;
+  padding: 5px 15px;
   cursor: pointer;
-  transition: background var(--transition), border-color var(--transition), color var(--transition);
+  transition: background var(--transition), color var(--transition);
 }
-.att-toggle:hover:not(:disabled) { border-color: var(--ink-3); color: var(--ink); }
-.att-toggle:focus-visible { outline: 2px solid var(--oxblood); outline-offset: 2px; }
-.att-toggle.absent {
-  background: rgba(178, 34, 34, 0.12);
-  border-color: var(--red);
-  color: var(--red);
-  font-weight: 600;
-}
-.att-toggle:disabled { opacity: 0.5; cursor: not-allowed; }
+.att-seg-btn + .att-seg-btn { border-left: 1px solid var(--line-2); }
+.att-seg-btn:hover:not(:disabled):not(.active) { color: var(--ink); background: var(--paper-2); }
+.att-seg-btn:focus-visible { outline: 2px solid var(--oxblood); outline-offset: -2px; z-index: 1; }
+.att-seg-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.att-seg-btn.active.present { background: var(--green); color: #fff; }
+.att-seg-btn.active.absent { background: var(--red); color: #fff; }
 
 /* "Check student" month calendar */
 .att-calendar { max-width: 380px; }

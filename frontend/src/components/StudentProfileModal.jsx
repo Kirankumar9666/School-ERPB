@@ -51,7 +51,8 @@ export default function StudentProfileModal({ student, onClose }) {
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   // Nested "All Exams" popup, opened from the View All button on the
-  // Attendance section header (profile modal stays open underneath).
+  // Marks & Academic Performance section header (profile modal stays open
+  // underneath).
   const [examsOpen, setExamsOpen] = useState(false);
   const viewAllRef = useRef(null); // focus returns here when the popup closes
 
@@ -184,17 +185,7 @@ export default function StudentProfileModal({ student, onClose }) {
           </div>
 
           <div className="section">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--sp-md)' }}>
-              <div className="section-title"><CalendarDays size={14} /> Attendance</div>
-              <button
-                ref={viewAllRef}
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => setExamsOpen(true)}
-              >
-                <Eye size={14} /> View All Exams
-              </button>
-            </div>
+            <div className="section-title"><CalendarDays size={14} /> Attendance</div>
             <div className="card">
               {attSummary && (
                 <div className="modal-meta" style={{ marginBottom: 'var(--sp-md)' }}>
@@ -221,7 +212,17 @@ export default function StudentProfileModal({ student, onClose }) {
           </div>
 
           <div className="section">
-            <div className="section-title"><Award size={14} /> Marks &amp; Academic Performance</div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--sp-md)' }}>
+              <div className="section-title"><Award size={14} /> Marks &amp; Academic Performance</div>
+              <button
+                ref={viewAllRef}
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setExamsOpen(true)}
+              >
+                <Eye size={14} /> View All Exams
+              </button>
+            </div>
             <div className="card">
               <div className="modal-meta" style={{ marginBottom: rows.length ? 'var(--sp-md)' : 0 }}>
                 <div>

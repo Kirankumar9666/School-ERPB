@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
-import { todayISO } from '../utils/date';
+import { initials, todayISO } from '../utils/date';
 import AttendanceMonthCalendar from './AttendanceMonthCalendar';
 
 /**
@@ -189,27 +189,49 @@ export default function MarkAttendance({ kind, groups, apiBase, nouns, title, se
 
           {subTab === 'give' && group && (
             <>
-              <div className="att-summary">
-                {absentSet.size} marked absent · {group.count - absentSet.size} present
+              <div className="att-summary" aria-label="Live attendance counts">
+                <div className="att-pill">
+                  Present <b>{group.count - absentSet.size}</b>
+                </div>
+                <div className={`att-pill absent${absentSet.size ? ' alert' : ''}`}>
+                  Absent <b>{absentSet.size}</b>
+                </div>
               </div>
               <div className="att-roster">
                 {group.members.map((m) => {
                   const absent = absentSet.has(m.id);
                   return (
                     <div key={m.id} className="att-row">
-                      <div>
-                        <div style={{ fontWeight: 600 }}>{m.rollNumber ? `${m.rollNumber} · ` : ''}{m.name}</div>
-                        <div className="text-sm text-muted">{m.parentName}{m.guardianContact ? ` · ${m.guardianContact}` : ''}</div>
+                      <div className="att-avatar" aria-hidden="true">{initials(m.name)}</div>
+                      <div className="att-member">
+                        <div className="att-member-name">
+                          <span className="att-name">{m.name}</span>
+                          {m.rollNumber && <span className="att-roll">{m.rollNumber}</span>}
+                        </div>
+                        <div className="att-member-meta">
+                          {m.parentName}{m.guardianContact ? ` · ${m.guardianContact}` : ''}
+                        </div>
                       </div>
-                      <button
-                        type="button"
-                        className={`att-toggle${absent ? ' absent' : ''}`}
-                        disabled={!editable}
-                        aria-pressed={absent}
-                        onClick={() => toggleAbsent(m.id)}
-                      >
-                        {absent ? 'Absent' : 'Present'}
-                      </button>
+                      <div className="att-seg" role="group" aria-label={`Attendance for ${m.name}`}>
+                        <button
+                          type="button"
+                          className={`att-seg-btn${!absent ? ' active present' : ''}`}
+                          disabled={!editable}
+                          aria-pressed={!absent}
+                          onClick={() => absent && toggleAbsent(m.id)}
+                        >
+                          Present
+                        </button>
+                        <button
+                          type="button"
+                          className={`att-seg-btn${absent ? ' active absent' : ''}`}
+                          disabled={!editable}
+                          aria-pressed={absent}
+                          onClick={() => !absent && toggleAbsent(m.id)}
+                        >
+                          Absent
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
