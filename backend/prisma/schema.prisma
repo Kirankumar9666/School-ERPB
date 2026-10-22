@@ -37,6 +37,21 @@ enum AccountStatus {
   inactive
 }
 
+/**
+ * Why an employee's engagement finished. Separate from AccountStatus on purpose:
+ * `status` is the single yes/no "is this person on the staff list" switch, and it
+ * is shared with User (where it means only "may this account log in"). How they
+ * left is event data — it belongs on a timeline row so a rehire can have its own
+ * later termination instead of overwriting the first.
+ */
+enum EmploymentEndReason {
+  resigned
+  terminated
+  retired
+  contract_ended
+  other
+}
+
 enum AttendanceStatus {
   present
   absent
@@ -70,6 +85,47 @@ enum Gender {
   Other
 }
 
+/**
+ * How a student's time in one class in one academic year ended.
+ *
+ * `active` means "was in this class during this year" — NOT "is in this class
+ * now". Currentness is answered by `Student.classId` and the current academic
+ * year, never by this flag, so a row backfilled for a year that is already over
+ * can honestly be `active` without claiming a present it does not have.
+ *
+ * `promoted` moved up a grade at the year boundary; the row stays so that year
+ * stays intact, and Class History can say where they went rather than only that
+ * they vanished. `passed_out` means they completed the school's top class and
+ * left; `left_school` is a mid-year exit or transfer, kept separate from passing
+ * out because "left" says nothing about whether they finished the grade.
+ */
+enum EnrollmentStatus {
+  active
+  promoted
+  passed_out
+  left_school
+}
+
+/**
+ * How a row came to exist, so a backfilled record is never mistaken for one the
+ * school recorded day to day.
+ *
+ *   live       — written through the normal flow (admission, the seeded fixtures)
+ *   promoted   — moved here by a Class Management promotion
+ *   historical — backfilled afterwards through "Enter Past Data"
+ *
+ * This is provenance, not workflow state: a promoted row is a live record that
+ * happens to have been created by a promotion, and it is edited exactly like one.
+ * It is stored because "was this keyed in from an old register, or did we mark it?"
+ * is a question a school legitimately needs answered about its own records.
+ */
+enum RecordSource {
+  live
+  promoted
+  historical
+}
+
+
 // ─── Identity ───────────────────────────────────────────────────────────────
 
 model User {
@@ -80,6 +136,17 @@ model User {
   name         String
   profilePhoto String?
   status       AccountStatus @default(active)
+  /**
+   * True while this account still authenticates with a password the school
+   * chose for the user rather than one the user chose — specifically a student
+   * account provisioned from the guardian contact (services/studentAccounts.js).
+   * That value is predictable and widely known, so it must not stay usable:
+   * the user is blocked from every business endpoint until they set their own
+   * password (POST /auth/change-password), which clears this flag.
+   * Defaults to false for accounts whose password was set deliberately
+   * (seeded accounts, staff, admin resets).
+   */
+  mustChangePassword Boolean @default(false)
   student      Student?
   employee     Employee?
   auditEntries AuditEntry[]
@@ -90,19 +157,84 @@ model User {
 
 // ─── Academic structure ─────────────────────────────────────────────────────
 
+/**
+ * A level the school teaches — Nursery, LKG, UKG, 1, 2, … 10.
+ *
+ * Levels are ORDINARY DATA ROWS, not constants in code: the admin can add one
+ * (see POST /admin/class-management/levels), and every screen reads the list back
+ * out of this table, so a school that runs Playgroup or goes to Class 12 needs no
+ * code change.
+ *
+ * `order` is INTERNAL and is never shown on screen. It is the only thing used for
+ * sorting and for promotion, and the migration seeds it contiguously with the
+ * grades already stored on `Class` — so an existing Class 5A keeps grade 5 and
+ * its whole row is untouched. Inserting a level between two others renumbers
+ * inside a transaction (see services/classes.js), which is why the value is
+ * allowed to move: nothing else in the app stores it.
+ */
+model GradeLevel {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  order     Int      @unique
+  classes   Class[]
+  createdAt DateTime @default(now())
+}
+
 model Class {
   id             String               @id // seeded as 'cls-10A' style ids
-  grade          Int // 1..12
+  grade          Int // the level's order, kept in sync — see services/classes.js
   section        String // single letter, A..D
   classTeacherId String?
   classTeacher   Employee?            @relation("ClassTeacher", fields: [classTeacherId], references: [id])
+  // The level this class belongs to. Nullable so the migration can add the column
+  // before linking it; backfilled for every existing class in the same migration,
+  // and only NULL again if its level is deleted (SET NULL, never cascade).
+  level          GradeLevel?          @relation(fields: [levelId], references: [id], onDelete: SetNull)
+  levelId        String?
   students       Student[]
   assignments    TeachingAssignment[]
   timetable      TimetablePeriod[]
   syllabus       SyllabusEntry[]
   exams          Exam[]
+  enrollments    StudentEnrollment[]
+  fees           StudentFee[]
+  announcements  Announcement[] @relation("AnnouncementTargetClass")
 
   @@unique([grade, section])
+  // The same rule as above, expressed on the level. `grade` holds the level's
+  // order, so the two cannot disagree — this index is the one that stays correct
+  // if a level's order ever moves.
+  @@unique([levelId, section])
+  @@index([levelId])
+}
+
+/**
+ * One school year, e.g. '2026-27'.
+ *
+ * This is the spine the whole Class Management feature hangs off. Its real
+ * content is the DATE RANGE: attendance and marks belong to the year their own
+ * date falls in, which is derivable and therefore cannot drift. The label is a
+ * convenience for humans and dropdowns, and `academicYearFor(date)` derives it
+ * from the range rather than storing it a second time.
+ *
+ * Exactly one row carries `isCurrent`. It is resolved by asking which range
+ * contains today — a stored flag that could disagree with the calendar is the
+ * kind of drift this schema avoids elsewhere, so the flag exists only to be
+ * *read*, never to be the authority, and a migration/test asserts they agree.
+ */
+model AcademicYear {
+  id        String   @id // 'ay-2026-27'
+  label     String   @unique // '2026-27'
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  isCurrent Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  enrollments StudentEnrollment[]
+  studentFees StudentFee[]
+  exams       Exam[]
+
+  @@index([startDate])
 }
 
 model TeachingAssignment {
@@ -127,11 +259,28 @@ model Student {
   user            User?    @relation(fields: [userId], references: [id])
   name            String
   photo           String?
-  classId         String
-  class           Class    @relation(fields: [classId], references: [id])
+  // The class they are in RIGHT NOW, i.e. the class on their enrollment for the
+  // current academic year — denormalised so the ~30 call sites that ask "who is on
+  // this class's register today" (attendance rosters, mark sheets, timetables,
+  // circular targeting, every class headcount) stay a single indexed column
+  // instead of a join. `StudentEnrollment` is the real, per-year history.
+  //
+  // Written in ONE place only — services/enrollment.js, inside the same
+  // transaction as the enrollment row — so the two cannot disagree; a test asserts
+  // the invariant across every operation in this file.
+  //
+  // NULLABLE, and that is what makes "passed out" work: a student who finished
+  // the top class keeps every year of their history on their enrollment rows and
+  // simply holds no current class, so they drop out of every current roster and
+  // headcount by construction rather than by a filter someone has to remember.
+  classId         String?
+  class           Class?   @relation(fields: [classId], references: [id])
   admissionYear   Int?
   // Roll numbers are unique per class (two classes can each have their own
-  // 'STU-2026-001'), not globally — see @@unique below.
+  // 'STU-2026-001'), not globally — see @@unique below. Like classId this is the
+  // CURRENT year's roll number; the per-year one lives on the enrollment, because
+  // a roll number is reassigned on promotion and is not a durable fact about a
+  // child.
   rollNumber      String?
   feeTotal        Int?
   feeDues         Int?
@@ -152,11 +301,182 @@ model Student {
   marks           MarksEntry[]
   achievements    Achievement[]
   documents       StudentDocument[]
+  enrollments     StudentEnrollment[]
+  fees            StudentFee[]
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   @@unique([classId, rollNumber])
   @@index([classId])
+  // "Find this child across years" searches name + guardian name + guardian
+  // contact. Name is the leading term of that search, so it gets the index; the
+  // guardian fields are filtered in the same pass and a school-sized table does
+  // not need a second one.
+  @@index([name])
+}
+
+/**
+ * One student's membership of one class for one academic year — the unit that
+ * makes a student's class a HISTORY rather than a single overwritten value.
+ *
+ * A student who came in at 8-A, was promoted to 9-A and then left holds three of
+ * these. Before this table existed, promotion could only ever overwrite
+ * `Student.classId`, and the year they spent in 8-A was simply gone: its rosters,
+ * its attendance totals and its mark sheets had all been written against a class
+ * they no longer belonged to, and Class History could not have been built at all.
+ *
+ * One row per (student, academic year), enforced by the unique key below, so a
+ * student cannot be in two classes at once in the same year — the mistake that
+ * silently corrupts a year's registers.
+ *
+ * The backfilled attendance totals hang off this row rather than living in their
+ * own table because an attendance summary for a student for a year IS exactly
+ * this row: one student, one year. They are nullable and all-or-none together,
+ * which distinguishes "not backfilled" (null) from "backfilled, and they was
+ * absent all term" (zeros) — a real if unusual record that must not be lost.
+ */
+model StudentEnrollment {
+  id             String           @id @default(cuid())
+  studentId      String
+  student        Student          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  academicYearId String
+  academicYear   AcademicYear     @relation(fields: [academicYearId], references: [id])
+  classId        String
+  class          Class            @relation(fields: [classId], references: [id])
+  // The roll number FOR THIS YEAR. Null is ordinary and expected on a promotion:
+  // the requirement is that a new roll number *can* be assigned for the new year,
+  // not that one is invented, because the register order is the office's call.
+  // Uniqueness is per (class, year) — two classes both have a roll '1'.
+  rollNumber     String?
+  status         EnrollmentStatus @default(active)
+  source         RecordSource     @default(live)
+  // When they joined this class for this year — used to gate attendance rosters
+  // for a mid-year admission, the same job Student.enrolledAt does for the school.
+  enrolledOn     DateTime         @db.Date
+  // Set when the row stops being current (promoted out, passed out, transferred).
+  // Null while this is their current row.
+  endedOn        DateTime?        @db.Date
+  // The class they were in immediately before this one, kept so a promotion can be
+  // read back as "8-A -> 9-A" without reconstructing the whole timeline, and so a
+  // row can be traced to the Class Management action that produced it.
+  promotedFromClassId String?
+  // How confident the identity match was when this row was created by a promotion
+  // or a backfill. Null for a live row. 'review' means an admin confirmed it by
+  // hand after the automatic match was ambiguous — retained so a disputed match
+  // is still visible later, not silently laundered into a clean 'exact'.
+  matchConfidence MatchConfidence?
+
+  // Backfilled yearly attendance totals for this student in this year. All three
+  // null, or all three set.
+  workingDays Int?
+  daysPresent Int?
+  daysAbsent  Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([studentId, academicYearId])
+  // A roll number is unique within a class within a year, not globally — every
+  // class numbers from 1. NULLs are distinct in Postgres, so the unenrolled rows a
+  // promotion leaves behind (a fresh roll number is the office's to assign) are
+  // unaffected.
+  @@unique([classId, academicYearId, rollNumber])
+  @@index([academicYearId, classId, status])
+  @@index([classId])
+  @@index([promotedFromClassId])
+}
+
+/**
+ * How sure the system is that two records are the same child.
+ *
+ * The school does not use a permanent student id on its registers, so a roster
+ * arriving from a spreadsheet (or a promotion across a year boundary) has to be
+ * matched to an existing student by NAME + GUARDIAN NAME + GUARDIAN CONTACT —
+ * never by roll number, which is reassigned every year and is therefore worthless
+ * for identity.
+ *
+ * `exact`     all three fields agree after normalisation.
+ * `partial`   the name and one guardian field agree; the other differs (usually a
+ *              contact that was reissued). Proposed, but the admin confirms.
+ * `ambiguous` more than one candidate, or none — never auto-resolved.
+ * `review`    an admin overrode an ambiguous match by hand.
+ */
+enum MatchConfidence {
+  exact
+  partial
+  ambiguous
+  review
+}
+
+/**
+ * One student's fee for ONE academic year.
+ *
+ * Before this table the fee was two scalars on `Student` (`feeTotal`,
+ * `feeDues`) that every promotion overwrote — so the amount owed for a year the
+ * child had already left ceased to exist, and "previous dues" had nowhere to
+ * live. This is the per-year record that survives a promotion: the new year
+ * starts blank (`total` NULL = "not set"), while the old year keeps its own
+ * amount, every payment and its final balance.
+ *
+ * `total` is deliberately NULLABLE, and NULL is a real, distinct meaning: the
+ * office has not set this year's fee yet. It is NOT zero — a school that charges
+ * nothing and one that has not decided are different facts, and the Fee Dues
+ * page needs to find the former.
+ *
+ * `classId` is the class the fee was charged FOR, captured at rollover, so a
+ * carried-forward balance can be labelled "₹5,000 from Class 9B, 2026-27"
+ * without reconstructing the enrollment timeline. It is SET NULL on delete like
+ * every other optional class reference.
+ */
+model StudentFee {
+  id             String       @id @default(cuid())
+  studentId      String
+  student        Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  academicYearId String
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id])
+  classId        String?
+  class          Class?       @relation(fields: [classId], references: [id])
+  // The amount set for the year. NULL = "Not set". A real 0 is a different fact.
+  total          Int?
+  payments       FeePayment[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  // One row per (student, year): a child cannot have two fees for one year.
+  @@unique([studentId, academicYearId])
+  // The Fee Dues page reads a class's fees for a year in one pass.
+  @@index([academicYearId, classId])
+}
+
+/**
+ * One fee payment, always against a specific year's `StudentFee`.
+ *
+ * The year is the fee row's `academicYearId`, so "which year did this payment
+ * settle" is a fact about the row rather than something inferred later. A single
+ * receipt that clears more than one year (an older balance and the current year)
+ * is split into one row per year, tied together by `receiptId`, so the history
+ * stays accurate after a promotion and the allocations are still visible as one
+ * payment.
+ */
+model FeePayment {
+  id           String     @id @default(cuid())
+  studentFeeId String
+  studentFee   StudentFee @relation(fields: [studentFeeId], references: [id], onDelete: Cascade)
+  amount       Int
+  paidOn       DateTime   @db.Date
+  note         String?
+  // The username that recorded the payment — read from the token, never trusted
+  // from the body. Null only for payments synthesized by the migration.
+  recordedBy   String?
+  // Groups the per-year rows that came from one physical receipt.
+  receiptId    String?
+  // True when a year was picked by hand ("this is for last year's fee") rather
+  // than reached by the oldest-first default, so the history can tell a
+  // deliberate choice apart from an automatic one.
+  chosenYear   Boolean    @default(false)
+  createdAt    DateTime   @default(now())
+
+  @@index([studentFeeId, paidOn])
 }
 
 model Employee {
@@ -196,66 +516,134 @@ model Employee {
   classesTaught      TeachingAssignment[]
   classesInCharge    Class[]         @relation("ClassTeacher")
   attendance         EmployeeAttendance[]
+  employmentEnds     EmploymentEnd[]
   leaveBalance       LeaveBalance?
   leaveRequests      LeaveRequest[]
   payroll            PayrollRecord[]
   documents          EmployeeDocument[]
+  announcementsSent  Announcement[]   @relation("AnnouncementAuthor")
   createdAt          DateTime        @default(now())
   updatedAt          DateTime        @updatedAt
 }
 
+/**
+ * One spell of employment, and the event that closed it.
+ *
+ * Append-only: a rehire writes a NEW row rather than editing or deleting the old
+ * one, so the history reads hired → ended → rehired → ended. The row is "open"
+ * (the current reason the employee is off the staff list) exactly while
+ * `reactivatedAt` is null; reactivation stamps the same row rather than erasing
+ * it, so a reopened spell still shows when and by whom it was closed.
+ *
+ * Nothing in an employee's history is destroyed by ending employment — payroll,
+ * attendance, marks, leave, documents and timetable rows all stay and keep
+ * pointing here. That is the entire reason this exists instead of a DELETE,
+ * which the foreign keys correctly refuse once any of them exist.
+ */
+model EmploymentEnd {
+  id             String              @id @default(cuid())
+  employeeId     String
+  employee       Employee            @relation(fields: [employeeId], references: [id])
+  reason         EmploymentEndReason
+  // The employee's own last day — deliberately NOT `endedAt` (when the office
+  // processed it) and not today's date: payroll is cut off on this day, and
+  // back-dated terminations are normal when paperwork is filed late.
+  lastWorkingDay DateTime            @db.Date
+  description    String?             @db.Text
+  // Staff login usernames, not FKs — the same choice MarksEntry.enteredBy makes.
+  // A username survives the user row, so the audit trail cannot be erased by
+  // removing the account it refers to.
+  endedBy        String
+  endedAt        DateTime            @default(now())
+  reactivatedAt  DateTime?
+  reactivatedBy  String?
+
+  @@index([employeeId, endedAt])
+}
+
 // ─── Attendance ─────────────────────────────────────────────────────────────
 
+/** The two half-days of a school day — attendance is tracked per session. */
+enum AttendanceSession {
+  FN
+  AN
+}
+
 model StudentAttendance {
-  id        String           @id @default(cuid())
+  id        String             @id @default(cuid())
   studentId String
-  student   Student          @relation(fields: [studentId], references: [id])
-  date      DateTime         @db.Date
+  student   Student            @relation(fields: [studentId], references: [id])
+  date      DateTime           @db.Date
+  session   AttendanceSession
   status    AttendanceStatus
 
-  @@unique([studentId, date])
+  @@unique([studentId, date, session])
   @@index([date])
 }
 
 model EmployeeAttendance {
-  id           String           @id @default(cuid())
+  id           String             @id @default(cuid())
   employeeId   String
-  employee     Employee         @relation(fields: [employeeId], references: [id])
-  date         DateTime         @db.Date
+  employee     Employee           @relation(fields: [employeeId], references: [id])
+  date         DateTime           @db.Date
+  session      AttendanceSession
   status       AttendanceStatus
   workingHours Float?
 
-  @@unique([employeeId, date])
+  @@unique([employeeId, date, session])
   @@index([date])
 }
 
-// One row per (kind, group, day) each time a bulk attendance save is
+// One row per (kind, group, day, session) each time a bulk attendance save is
 // confirmed — confirmedAt drives the 1-hour edit window on the admin
-// attendance screen. kind: 'student' (groupKey = class id) or 'employee'
-// (groupKey = designation).
+// attendance screen, independently per session (confirming FN never locks AN).
+// kind: 'student' (groupKey = class id) or 'employee' (groupKey = designation).
 model AttendanceConfirmation {
-  id          String   @id @default(cuid())
+  id          String             @id @default(cuid())
   kind        String
   groupKey    String
-  date        DateTime @db.Date
-  confirmedAt DateTime @default(now())
+  date        DateTime           @db.Date
+  session     AttendanceSession
+  confirmedAt DateTime           @default(now())
   markedBy    String?
 
-  @@unique([kind, groupKey, date])
+  @@unique([kind, groupKey, date, session])
   @@index([date])
 }
 
 // ─── Marks ──────────────────────────────────────────────────────────────────
 
 model Exam {
-  id      String       @id // seeded as 'exam-001' style ids
+  id      String   @id // seeded as 'exam-001' style ids
   classId String
-  class   Class        @relation(fields: [classId], references: [id])
+  class   Class    @relation(fields: [classId], references: [id])
   name    String
-  date    DateTime     @db.Date
-  marks   MarksEntry[]
+  // Nullable, because a backfilled register often records the year of an exam but
+  // not the day ("Annual 2024-25"), and inventing a date to satisfy a NOT NULL
+  // would put a fact in the database that nobody actually knows. Undated exams sort
+  // after dated ones within their year; every reader renders them as "—" rather
+  // than guessing. A LIVE exam always has one — it is chosen in the form.
+  date    DateTime? @db.Date
+  // The year this exam belongs to, as a real column rather than derived from
+  // `date`, for two reasons that both bite in practice:
+  //
+  //   1. It is the unique key. Two years both have a "Unit Test 1" for Class 5A,
+  //      and `[classId, name]` cannot tell them apart — so a backfilled historical
+  //      exam would collide with the live one and be unrecordable.
+  //   2. Backfilled history often has no precise date (a register says "Annual,
+  //      2024-25"), and forcing a fake day onto it to make a derivation work
+  //      would put a date in the database that nobody actually knows.
+  //
+  // For a live exam the year is DERIVED from the date that was chosen, so the two
+  // cannot disagree; only a backfill, where the date is optional, sets it
+  // independently.
+  academicYearId String
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id])
+  source         RecordSource @default(live)
+  marks          MarksEntry[]
 
-  @@unique([classId, name])
+  @@unique([classId, academicYearId, name])
+  @@index([academicYearId])
 }
 
 model MarksEntry {
@@ -264,12 +652,39 @@ model MarksEntry {
   student   Student @relation(fields: [studentId], references: [id])
   examId    String
   exam      Exam    @relation(fields: [examId], references: [id])
+  // Free text, but written through services/marks.js, which resolves every save
+  // against the class's TimetablePeriod rows and stores THAT spelling. So
+  // "maths", "MATHEMATICS" and " mathematics " all persist as the timetable's
+  // "Mathematics" — which is what lets a teacher's permitted (class, subject)
+  // pair and this row's subject be the same string by construction.
   subject   String
   maxMarks  Int
   obtained  Int
+  // Who recorded the mark and when (first save), and who corrected it and when.
+  // Staff login usernames, not FKs, so removing an employee never deletes their
+  // historical marks. Null on rows written before 2026-09-28 — the read side
+  // renders "—" rather than inventing an author.
+  enteredBy String?
+  enteredAt DateTime?
+  updatedBy String?
+  updatedAt DateTime?
+  // The TEACHER's own 2-day edit clock: when a teacher last wrote this row, from
+  // the Employee Portal's Marks Entry or its bulk upload. Deliberately NOT
+  // `updatedAt` — an admin correction stamps that too, and anchoring the window
+  // to it would mean an admin fixing a typo hands the teacher a fresh 48 hours
+  // to overwrite the correction. The admin's write must not reopen the window;
+  // it must close it for good, which is what a separate column makes true.
+  // Null means "no teacher has ever saved this": a row only the office ever
+  // wrote has no teacher window to close, and a row predating this column has
+  // no recorded save time to count from.
+  teacherSavedAt DateTime?
 
   @@unique([studentId, examId, subject])
   @@index([examId])
+  // The teacher Marks Entry page lists one class+subject's saved exams, and the
+  // Admin Panel's "Saved Marks" table filters by subject — without this the
+  // (exam, subject) lookup is a scan per request.
+  @@index([examId, subject])
 }
 
 // ─── Timetable / syllabus ───────────────────────────────────────────────────
@@ -339,9 +754,42 @@ model PayrollRecord {
   professionalTax    Int       @default(0)
   tds                Int       @default(0)
   netSalary          Int
+  // The date the month became FULLY settled — i.e. the date of the payment that
+  // first brought the sum of `payments` to `netSalary`, or null while anything is
+  // still outstanding. A derived CACHE of the payment rows, not an independent
+  // fact: it is recomputed from them inside the same transaction on every payment
+  // write and on every salary edit, so the two can never drift. It stays a real
+  // column because the payslip PDF and the employee-facing reads want one scalar
+  // to print, and a stored date is cheaper to read than re-deriving it per row.
   paidOn             DateTime? @db.Date
+  payments           PayrollPayment[]
 
   @@unique([employeeId, month])
+}
+
+// One row per money actually transferred for one (employee, month) — the unit
+// that makes PARTIAL payment possible. It hangs off the PayrollRecord rather
+// than repeating employeeId + month on itself: a record IS exactly one
+// (employee, month) pair, enforced by the unique above, so the link already
+// carries both and an orphan payment for a month that has no salary structure
+// (and therefore no net to be measured against) is impossible by construction.
+//
+// Overpayment is deliberately permitted — a real bank transfer that exceeded the
+// net did happen, and refusing to record it would leave the books wrong. It shows
+// as a negative remaining balance rather than being silently clamped.
+model PayrollPayment {
+  id              String        @id @default(cuid())
+  payrollRecordId String
+  payrollRecord   PayrollRecord @relation(fields: [payrollRecordId], references: [id], onDelete: Cascade)
+  amount          Int // ₹, whole rupees, always positive (a reversal is a delete)
+  paidOn          DateTime      @db.Date
+  note            String? // free text: "advance", "salary on hold", …
+  createdAt       DateTime      @default(now())
+
+  // Serves the two reads that matter: a record's payments in date order (the
+  // detail view and the settledOn recompute), and the whole-table sweep the
+  // payroll list does.
+  @@index([payrollRecordId, paidOn])
 }
 
 // ─── Documents / announcements / holidays / achievements ───────────────────
@@ -379,6 +827,35 @@ model Announcement {
   createdAt   DateTime @default(now())
   showFrom    DateTime @db.Date // circular appears from this day (inclusive)
   showUntil   DateTime @db.Date // circular disappears after this day (inclusive last day)
+  // ── Optional PDF attachment (real bytes, validated + stored on the row exactly
+  // like EmployeeDocument/StudentDocument `data`; null = text-only circular).
+  pdfFileName String?
+  pdfData     Bytes?
+  // ── Targeting scope. ROLES is the classic Audience-tag broad send (every
+  // logged-in user whose Role is in `targetRoles`). CLASS is a targeted send to
+  // one class's students. EMPLOYEES is a targeted send to every employee.
+  // All three live in this one table/list on purpose: a class-scoped circular is
+  // still a circular, and the portals render both from the same feed.
+  targetScope     AnnouncementScope @default(ROLES)
+  // Set only when targetScope = CLASS — the one class whose students may read it.
+  targetClassId   String?
+  targetClass     Class?            @relation("AnnouncementTargetClass", fields: [targetClassId], references: [id])
+  // Attribution for anything an employee pushed from the Employee Portal, so
+  // students can see it came from their teacher and not the admin office.
+  createdById     String?
+  createdBy       Employee?         @relation("AnnouncementAuthor", fields: [createdById], references: [id])
+  attributedTo    String? // denormalised author name, so the label survives employee deletion
+
+  @@index([targetScope])
+  @@index([targetClassId])
+  @@index([createdById])
+}
+
+/** Who an announcement is actually addressed to — see the model's own notes. */
+enum AnnouncementScope {
+  ROLES
+  CLASS
+  EMPLOYEES
 }
 
 model Holiday {
@@ -414,6 +891,18 @@ model Achievement {
   type        String // 'academic' | 'sports' | ...
 
   @@index([studentId])
+}
+
+/**
+ * School-level key/value settings — one row per setting, `value` a JSON blob.
+ * The first tenant is the weekly-off configuration (`weeklyOffDays`, an array
+ * of JS weekday numbers, 0 = Sunday), read by every calendar and attendance
+ * calculation so the school's real working week has exactly one definition.
+ */
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
 }
 
 // ─── Audit trail ────────────────────────────────────────────────────────────

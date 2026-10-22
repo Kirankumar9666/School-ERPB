@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Bell, Plus, X } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../services/toast';
 import api from '../services/api';
+import LoadErrorState from './LoadErrorState';
+import { describeLoadError } from '../utils/useLoadState';
 import { todayISO } from '../utils/date';
+import { getReminders, invalidateReminders } from '../utils/remindersCache';
 
 /** 'YYYY-MM-DD' → '8 Sep 2026' (en-IN) */
 const fmtDay = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IN', {
@@ -35,13 +38,34 @@ export default function ReminderSection({ onChange }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ date: '', title: '' });
+  // Set only when the list itself failed to load — an outage must not be drawn
+  // as "No upcoming reminders", which is a claim that the user has none.
+  const [error, setError] = useState('');
+  const [rev, setRev] = useState(0); // bumped by "Try again"
 
+  // The catch lives inside `load` rather than on its callers so every path that
+  // refreshes the list records a failure. It also deliberately does NOT reject:
+  // `handleAdd` awaits `load()` after a successful POST, and letting it reject
+  // there would toast "could not set the reminder" for a reminder that was in
+  // fact saved.
+  // Reads go through the shared reminders cache (utils/remindersCache.js) so
+  // this list and the popup's are ONE set of rows from one fetch, not two
+  // requests per page. After a write we invalidate the cache first so this
+  // refresh (and the popup's next read) see the change.
   const load = useCallback(() =>
-    api.get('/school/reminders').then((r) => setReminders(r.data.data || [])), []);
+    getReminders({ force: true })
+      .then((list) => { setReminders(list); setError(''); })
+      .catch((err) => setError(describeLoadError(err))), []);
 
   useEffect(() => {
     load().finally(() => setLoading(false));
-  }, [load]);
+  }, [load, rev]);
+
+  const retry = () => {
+    setError('');
+    setLoading(true);
+    setRev((n) => n + 1);
+  };
 
   /* Upcoming = today onwards (inclusive), in the server's soonest-first order. */
   const today = todayISO();
@@ -62,6 +86,7 @@ export default function ReminderSection({ onChange }) {
       await api.post('/school/reminders', { date: form.date, title: form.title.trim() });
       toast.success('Reminder set!');
       setForm({ date: '', title: '' });
+      invalidateReminders();
       await load();
       onChange?.();
     } catch (err) {
@@ -75,6 +100,7 @@ export default function ReminderSection({ onChange }) {
     try {
       await api.delete(`/school/reminders/${r.id}`);
       toast.success('Reminder deleted.');
+      invalidateReminders();
       await load();
       onChange?.();
     } catch (err) {
@@ -114,6 +140,8 @@ export default function ReminderSection({ onChange }) {
 
       {loading ? (
         <div className="text-sm text-muted">Loading…</div>
+      ) : error ? (
+        <LoadErrorState compact detail={error} onRetry={retry} />
       ) : upcoming.length === 0 ? (
         <div className="text-sm text-muted">No upcoming reminders — add one above</div>
       ) : (

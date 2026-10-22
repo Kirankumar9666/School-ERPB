@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
+import { resetRemindersCache } from '../utils/remindersCache';
 
 const AuthContext = createContext(null);
 
@@ -28,6 +29,9 @@ export const AuthProvider = ({ children }) => {
     localStorage.setItem('accessToken', accessToken);
     localStorage.setItem('refreshToken', refreshToken);
     localStorage.setItem('user', JSON.stringify(userData));
+    // A fresh login starts with an empty reminders cache, so nothing from a
+    // previous session on this device can be shown to the new user.
+    resetRemindersCache();
     setUser(userData);
     return userData;
   }, []);
@@ -36,11 +40,33 @@ export const AuthProvider = ({ children }) => {
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
     localStorage.removeItem('user');
+    // Drop the cached reminders so the next user never sees this one's list.
+    resetRemindersCache();
     setUser(null);
   }, []);
 
+  /**
+   * Change the signed-in user's OWN password — the only way out of the forced
+   * first-login state (user.mustChangePassword) that student accounts are
+   * created in. The server replies with a freshly signed access token whose
+   * flag is already cleared plus the sanitized user shape, so both are swapped
+   * in together and the app unblocks on the spot. No password is ever written
+   * to storage, and only the caller of this function ever holds one.
+   */
+  const changePassword = useCallback(async (currentPassword, newPassword) => {
+    const { data } = await api.post('/auth/change-password', { currentPassword, newPassword });
+    const { accessToken, user: userData } = data.data;
+
+    localStorage.setItem('accessToken', accessToken);
+    localStorage.setItem('user', JSON.stringify(userData));
+    setUser(userData);
+    return userData;
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, login, logout, loading, isAuthenticated: !!user }}>
+    <AuthContext.Provider
+      value={{ user, login, logout, changePassword, loading, isAuthenticated: !!user }}
+    >
       {children}
     </AuthContext.Provider>
   );

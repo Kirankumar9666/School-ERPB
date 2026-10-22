@@ -85,7 +85,13 @@ test('students: create with invalid payload → 400 VALIDATION_ERROR', async () 
 });
 
 test('students: update/delete unknown id → 404', async () => {
-  const validBody = { name: 'Ghost Student', class: '9', section: 'B' };
+  // Guardian name and contact are required fields, so the payload carries them:
+  // a 404 must still be reached — validation passing is what makes the missing
+  // id the thing under test rather than the missing guardian.
+  const validBody = {
+    name: 'Ghost Student', class: '9', section: 'B',
+    parentName: 'Ghost Parent', guardianContact: '+91-9000000009',
+  };
   const upd = await request(ctx.base, '/admin/students/stu-999', { method: 'PUT', token: admin.accessToken, body: validBody });
   assert.equal(upd.status, 404);
   const del = await request(ctx.base, '/admin/students/stu-999', { method: 'DELETE', token: admin.accessToken });
@@ -177,7 +183,7 @@ test('attendance marking: upsert + month filter', async () => {
   const marked = await request(ctx.base, '/admin/attendance', {
     method: 'POST',
     token: admin.accessToken,
-    body: { entityType: 'student', entityId: 'stu-001', date: '2026-09-15', status: 'present' },
+    body: { entityType: 'student', entityId: 'stu-001', date: '2026-09-15', session: 'FN', status: 'present' },
   });
   assert.equal(marked.status, 201);
 
@@ -187,20 +193,59 @@ test('attendance marking: upsert + month filter', async () => {
   assert.equal(att.body.data.records['2026-09-15'], 'present');
 });
 
+test('attendance sessions: FN and AN stored independently; a split day reads as half-day', async () => {
+  // Same student, same day — present in the forenoon, absent in the afternoon.
+  const fn = await request(ctx.base, '/admin/attendance', {
+    method: 'POST',
+    token: admin.accessToken,
+    body: { entityType: 'student', entityId: 'stu-001', date: '2026-09-16', session: 'FN', status: 'present' },
+  });
+  assert.equal(fn.status, 201);
+  const an = await request(ctx.base, '/admin/attendance', {
+    method: 'POST',
+    token: admin.accessToken,
+    body: { entityType: 'student', entityId: 'stu-001', date: '2026-09-16', session: 'AN', status: 'absent' },
+  });
+  assert.equal(an.status, 201);
+
+  // Two real session rows exist (not one overwritten day row)…
+  const prisma = require('../src/services/prisma');
+  const rows = await prisma.studentAttendance.findMany({ where: { studentId: 'stu-001', date: new Date('2026-09-16T00:00:00.000Z') } });
+  assert.equal(rows.length, 2, 'FN and AN are separate rows');
+  assert.deepEqual(new Set(rows.map((r) => r.session)), new Set(['FN', 'AN']));
+
+  // …and the day merge resolves the split into the existing half-day concept.
+  const att = await request(ctx.base, '/students/stu-001/attendance?month=2026-09', { token: admin.accessToken });
+  assert.equal(att.body.data.records['2026-09-16'], 'half-day');
+
+  // The half-day counts toward the month's working days at 0.5 (weighted):
+  // 6 seeded present + 1 marked on 09-15 + this 0.5 = 7.5 attended days.
+  assert.equal(att.body.data.summary.halfDay, 1);
+  assert.equal(att.body.data.summary.attended, 7.5);
+  assert.equal(att.body.data.summary.percent, 83.3);
+});
+
 test('attendance marking: invalid status/date → 400', async () => {
   const badStatus = await request(ctx.base, '/admin/attendance', {
     method: 'POST',
     token: admin.accessToken,
-    body: { entityType: 'student', entityId: 'stu-001', date: '2026-09-15', status: 'teleporting' },
+    body: { entityType: 'student', entityId: 'stu-001', date: '2026-09-15', session: 'FN', status: 'teleporting' },
   });
   assert.equal(badStatus.status, 400);
 
   const badDate = await request(ctx.base, '/admin/attendance', {
     method: 'POST',
     token: admin.accessToken,
-    body: { entityType: 'student', entityId: 'stu-001', date: '15-09-2026', status: 'present' },
+    body: { entityType: 'student', entityId: 'stu-001', date: '15-09-2026', session: 'FN', status: 'present' },
   });
   assert.equal(badDate.status, 400);
+
+  const badSession = await request(ctx.base, '/admin/attendance', {
+    method: 'POST',
+    token: admin.accessToken,
+    body: { entityType: 'student', entityId: 'stu-001', date: '2026-09-15', session: 'MIDDAY', status: 'present' },
+  });
+  assert.equal(badSession.status, 400);
 });
 
 test('marks: publish exam results and read them back', async () => {
@@ -354,6 +399,14 @@ test('leaves: pending list shows a new application and status update works', asy
   assert.ok(listed, 'new pending leave listed for admin');
   assert.equal(listed.employeeId, 'emp-001');
   assert.equal(listed.employeeName, 'Priya Sharma');
+  // The Leave Approval screen's "View more" popup is headed by the employee, so
+  // the designation has to come from this one list response — not a second call.
+  assert.equal(listed.employeeDesignation, 'Senior Teacher', 'the designation is the employee\'s real one, from the join — not empty or null');
+  // The popup's summary header and the employee portal's row both read these
+  // straight off the record, so the fields it renders must actually be present.
+  for (const field of ['type', 'fromDate', 'toDate', 'reason', 'status', 'appliedAt']) {
+    assert.ok(field in listed, `pending leave carries "${field}" for the reason popup`);
+  }
 
   // decision endpoint validates status and updates the record
   const bad = await request(ctx.base, `/admin/leaves/${leaveId}/status`, {

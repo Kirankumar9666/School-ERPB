@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronRight, GraduationCap, Plus, Pencil, Trash, Upload, KeyRound, Eye } from 'lucide-react';
+import { ChevronRight, GraduationCap, Plus, Pencil, Trash, Upload, KeyRound, Eye, TriangleAlert } from 'lucide-react';
 import Modal from '../../components/Modal';
 import ConfirmModal from '../../components/ConfirmModal';
 import ResetPasswordModal from '../../components/ResetPasswordModal';
 import StudentProfileModal from '../../components/StudentProfileModal';
-import { contactToField, fieldToContact, isValidContact } from '../../utils/phone';
+import LoadErrorState from '../../components/LoadErrorState';
+import CreateClassModal from '../../components/CreateClassModal';
+import BulkAddModal from '../../components/BulkAddModal';
+import { contactToField, fieldToContact } from '../../utils/phone';
+import { apiErrorMessage } from '../../utils/apiError';
 import api from '../../services/api';
 import { loadOptions } from '../../services/options';
-import toast from 'react-hot-toast';
+import toast from '../../services/toast';
 import studentForm from './studentForm';
 
 /**
@@ -17,23 +21,13 @@ import studentForm from './studentForm';
 const EMPTY_FORM = {
   name: '', class: '', section: '', rollNumber: '', parentName: '', guardianContact: '',
   admissionYear: '', bloodGroup: '', dob: '', feeTotal: '', feeDues: '', address: '',
+  // The class chosen from the shared list; class/section mirror it so the legacy
+  // typed form still travels in the payload.
+  classId: '',
 };
-
-/** CSV columns — header row required, in this exact order (RollNumber optional) */
-const BULK_COLUMNS = ['Name', 'Class', 'Section', 'RollNumber', 'ParentGuardian', 'Contact', 'FeeDues'];
 
 const money = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
 
-/** Download a CSV template containing just the required header row */
-const downloadTemplate = () => {
-  const blob = new Blob([`\uFEFF${BULK_COLUMNS.join(',')}\r\n`], { type: 'text/csv;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'students-template.csv';
-  a.click();
-  URL.revokeObjectURL(url);
-};
 
 /**
  * Admin Students — class-grouped overview with search, per-class member
@@ -45,38 +39,70 @@ export default function AdminStudents() {
   const [students, setStudents] = useState([]);
   const [options, setOptions] = useState({ enums: {}, classes: [] });
   const [loading, setLoading] = useState(true);
+  /* Why the last load failed, in words the office can act on. Without this the
+     page had no way to tell "the school has no students" apart from "I could not
+     ask" — it rendered a confident "0 students across 0 classes" and an empty
+     state telling you to add your first admission, while every student was still
+     in the database. A blank list and a failed request must not look alike. */
+  const [loadError, setLoadError] = useState('');
   const [q, setQ] = useState('');
   const [modal, setModal] = useState(null); // { mode: 'create' | 'edit' | 'bulk' | 'roster', ... }
   const [form, setForm] = useState({ ...EMPTY_FORM });
   const [rowRefs] = useState(() => new Map()); // class key → row element, for focus return
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  // Bulk-upload error lives in its own state so it can never leak into the
-  // Bulk Add modal on open — it is only ever set by handleBulk (a real,
-  // failed submit attempt) and cleared when the modal opens or a file is chosen.
-  const [bulkError, setBulkError] = useState('');
   // Reset-password modal: the user account of the student being reset.
   // Null when the student has no account (the button only renders when userId exists).
   const [resettingUser, setResettingUser] = useState(null);
   // Full profile view: the student whose profile is open from the class roster.
   const [viewing, setViewing] = useState(null);
+  // Create Class / Add Level. The level list is read alongside the class list so
+  // both dropdowns share one source.
+  const [creatingClass, setCreatingClass] = useState(false);
+  const [levels, setLevels] = useState([]);
 
   const load = (query = q) =>
     Promise.all([
       api.get('/admin/students/by-class', { params: query ? { q: query } : undefined }),
       api.get('/admin/students'),
       loadOptions(), // classes are re-read because this page can create them
-    ]).then(([c, s, o]) => {
+      api.get('/admin/class-levels'),
+    ]).then(([c, s, o, lv]) => {
       const classRows = c.data.data;
       setClasses(classRows);
       setStudents(s.data.data);
       setOptions(o);
+      setLevels(lv.data.data || []);
+      setLoadError('');
       return { classes: classRows }; // so callers can sync an open roster modal
+    })
+    /* Promise.all rejects as soon as ANY of the three does, so one failed request
+       used to abandon the .then entirely — leaving the arrays at their `[]`
+       initial values and the page showing a blank but authoritative-looking
+       summary. The failure is now recorded so the render can say so; it still
+       re-throws, because the callers after a save/delete have their own try/catch
+       and should hear that the refresh did not happen. */
+    .catch((err) => {
+      setLoadError(err.response?.data?.message || err.message || 'Could not reach the server.');
+      throw err;
     });
 
   useEffect(() => {
-    load().finally(() => setLoading(false));
+    load()
+      .catch(() => { /* already recorded in loadError; render below reports it */ })
+      .finally(() => setLoading(false));
   }, []);
+
+  /** Re-run the same load from the error state — the failure may have been a blip. */
+  const retry = () => {
+    setLoading(true);
+    load().catch(() => {}).finally(() => setLoading(false));
+  };
+
+  /* How many students hold no current class. `mapStudent` reports that as a null
+     `class`, so this is derivable from the list the page already has — no extra
+     request, and it can never disagree with the count on the same line. */
+  const unassignedCount = students.filter((s) => !s.class).length;
 
   // Live search as you type (debounced): only the class-group list is refetched —
   // the students list and dropdown options are unaffected by the query.
@@ -106,10 +132,12 @@ export default function AdminStudents() {
     setModal({ mode: 'roster', cls: c, returnRef: { current: rowRefs.get(c.key) || null } });
 
   const openCreate = (preset = {}) => {
-    // Default to a class that exists (first by grade), never a fixed grade/section
+    // Default to the first class that exists (lowest level order), never a fixed
+    // grade/section - a school with no pre-primary must not see Nursery offered.
     const first = options.classes[0];
     setForm({
       ...EMPTY_FORM,
+      classId: preset.classId ?? first?.id ?? '',
       class: preset.class ?? first?.grade ?? '',
       section: preset.section ?? first?.section ?? '',
     });
@@ -120,6 +148,9 @@ export default function AdminStudents() {
   const openEdit = (s) => {
     setForm({
       name: s.name || '', class: s.class || '', section: s.section || '', rollNumber: s.rollNumber || '',
+      // The real class id, so editing a student in Nursery works and the form
+      // shows the class they are actually in rather than an order number.
+      classId: s.classId || '',
       parentName: s.parentName || '', guardianContact: contactToField(s.guardianContact),
       admissionYear: s.admissionYear || '', bloodGroup: s.bloodGroup || '', dob: s.dob || '',
       feeTotal: s.feeTotal ?? '', feeDues: s.feeDues ?? '', address: s.address || '',
@@ -130,6 +161,9 @@ export default function AdminStudents() {
 
   // Destructive-action confirmation (ConfirmModal replaces window.confirm)
   const [confirm, setConfirm] = useState(null);
+  // The empty class awaiting delete confirmation. Kept apart from `confirm` so the
+  // class panel can stay open behind it.
+  const [deleteClass, setDeleteClass] = useState(null);
 
   const handleDelete = (s) => {
     setConfirm({
@@ -157,6 +191,8 @@ export default function AdminStudents() {
 
   const toPayload = (f) => ({
     name: f.name.trim(),
+    // The class id is the payload; the typed form is only the legacy fallback.
+    classId: f.classId || undefined,
     class: String(f.class).trim(),
     section: String(f.section).trim().toUpperCase(),
     rollNumber: f.rollNumber.trim() || undefined,
@@ -172,12 +208,34 @@ export default function AdminStudents() {
 
   const handleSave = async () => {
     setError('');
-    if (!form.name.trim() || !String(form.class).trim() || !String(form.section).trim()) {
-      setError('Name, Class and Section are required.');
+    if (!form.name.trim() || !form.classId) {
+      setError('Name and Class are required.');
       return;
     }
-    if (!isValidContact(form.guardianContact)) {
-      setError('Enter a valid 10-digit contact number.');
+    /* Guardian name and contact are REQUIRED, marked * on the form. They are the
+       identity a duplicate student is recognised by, and the contact is what the
+       student's login password is derived from — a blank one would leave a child
+       the duplicate rule cannot see and the login service cannot provision. The
+       server enforces exactly the same rule; this only avoids the round trip. */
+    if (!form.parentName.trim()) {
+      setError('Parent / Guardian is required.');
+      return;
+    }
+    if (form.guardianContact.length !== 10) {
+      setError('Enter a valid 10-digit guardian contact number.');
+      return;
+    }
+    /* The same two rules the server enforces, checked here only to spare the
+       round trip: a future date of birth and a fee that is not whole rupees.
+       Neither is a warning — the API refuses both. */
+    const today = new Date().toISOString().slice(0, 10);
+    if (form.dob && form.dob > today) {
+      setError('Date of birth cannot be in the future');
+      return;
+    }
+    if ((form.feeTotal !== '' && Number(form.feeTotal) % 1 !== 0)
+      || (form.feeDues !== '' && Number(form.feeDues) % 1 !== 0)) {
+      setError('Enter a whole rupee amount');
       return;
     }
     setSaving(true);
@@ -186,10 +244,12 @@ export default function AdminStudents() {
       if (modal.mode === 'create') {
         const res = await api.post('/admin/students', payload);
         // The server auto-provisions the login (username from the name, initial
-        // password = guardian contact) — surface it so the admin can hand it out.
+        // password = guardian contact) — this response is the ONLY place it is
+        // ever stated, so surface it here for the handover. It cannot be read
+        // back afterwards, and the student must change it at first login.
         const acc = res.data.data?.account;
         toast.success(acc?.username
-          ? `Student added — login ${acc.username} · initial password = guardian contact`
+          ? `Student added — login ${acc.username} · initial password = guardian contact (shown now only — it can't be retrieved later)`
           : 'Student added!');
       } else {
         await api.put(`/admin/students/${modal.student.id}`, payload);
@@ -198,29 +258,9 @@ export default function AdminStudents() {
       setModal(null);
       await load();
     } catch (err) {
-      setError(err.response?.data?.message || 'Could not save the student.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleBulk = async (file) => {
-    setBulkError(''); // choosing a file always clears any previous error
-    if (!file) {
-      setBulkError('Choose a .csv or .xlsx file first.');
-      return;
-    }
-    setSaving(true);
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await api.post('/admin/students/bulk', fd);
-      toast.success(res.data.message || 'Students added.');
-      setModal(null);
-      await load();
-    } catch (err) {
-      // Only place the bulk banner is ever populated — a real failed attempt.
-      setBulkError(err.response?.data?.message || 'Bulk upload failed.');
+      // Surface the server's per-field messages (QA-A1-010): a rejected field
+      // used to arrive as a bare "Validation failed" with no clue which one.
+      setError(apiErrorMessage(err, {}, 'Could not save the student.'));
     } finally {
       setSaving(false);
     }
@@ -228,12 +268,44 @@ export default function AdminStudents() {
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
 
+  /* Per-row / per-column bulk failures, under the banner. Row numbers count the
+     header line, so "Row 2" is the file's second line — the same numbering the
+     server reports on, which the admin sees in their spreadsheet. */
+
+  /* A failed load must NOT fall through to the empty state further down. "0
+     students across 0 classes" paired with "No students yet. Add your first
+     admission." is a statement that the school has no students — a completely
+     different claim from "I could not ask". Presenting the second as the first
+     is what made a single 500 response look like the whole database had been
+     emptied, so the two are now told apart before anything else renders. */
+  if (loadError) {
+    return (
+      <LoadErrorState
+        title="Student Management"
+        detail={loadError}
+        onRetry={retry}
+        icon={TriangleAlert}
+      />
+    );
+  }
+
   return (
     <div className="page fade-in">
       <div className="page-header">
         <div className="page-title">Student Management</div>
         <div className="page-subtitle">
-          {students.length} students across {classes.length} {classes.length === 1 ? 'class' : 'classes'}
+          {students.length} student{students.length === 1 ? '' : 's'} across{' '}
+          {classes.length} {classes.length === 1 ? 'class' : 'classes'}
+          {/* Students with no current class are counted above because they still
+              exist, but they belong to no class card — they are alumni and
+              past-year records, and saying so keeps the two numbers from
+              looking like a discrepancy. */}
+          {unassignedCount > 0 && (
+            <span className="text-muted">
+              {' · '}
+              {unassignedCount} not in a current class (see Class History)
+            </span>
+          )}
         </div>
       </div>
 
@@ -250,9 +322,17 @@ export default function AdminStudents() {
         <div style={{ display: 'flex', gap: 'var(--sp-sm)' }}>
           <button
             className="btn btn-secondary"
-            onClick={() => { setBulkError(''); setModal({ mode: 'bulk' }); }}
+            onClick={() => setModal({ mode: 'bulk' })}
           >
             <Upload size={16} /> Bulk Add
+          </button>
+          {/* Same outline style as Bulk Add: it creates, but it is not the
+              action the page is about (that is still Add Student). */}
+          <button
+            className="btn btn-secondary"
+            onClick={() => setCreatingClass(true)}
+          >
+            <Plus size={16} /> Create Class
           </button>
           <button className="btn btn-primary" onClick={openCreate}>
             <Plus size={16} /> Add Student
@@ -294,6 +374,11 @@ export default function AdminStudents() {
                   ? <span className="badge badge-danger">{money(c.feeDues)}</span>
                   : <span className="badge badge-success">No dues</span>}
               </div>
+              {c.previousDues > 0 && (
+                <div className="text-sm text-muted">
+                  includes {money(c.previousDues)} carried from earlier years
+                </div>
+              )}
               {c.avgMarks != null ? (
                 <div className="class-card-stats">
                   <div className="class-card-stats-row">
@@ -339,13 +424,29 @@ export default function AdminStudents() {
             returnFocusRef={modal.returnRef}
             onClose={() => setModal(null)}
             footer={(
-              <button
-                className="btn btn-primary"
-                onClick={() => openCreate(preset)}
-                disabled={saving}
-              >
-                <Plus size={16} /> Add Student to this Class
-              </button>
+              <>
+                {/* Delete class, offered only for a class that holds nothing. A
+                    class with any record cannot be deleted (the route refuses and
+                    names what is in the way), so offering it would be a promise the
+                    server will not keep. */}
+                {c.totalStudents === 0 && (
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => setDeleteClass(c)}
+                    disabled={saving}
+                    title="This class has no students and no records"
+                  >
+                    <Trash size={16} /> Delete class
+                  </button>
+                )}
+                <button
+                  className="btn btn-primary"
+                  onClick={() => openCreate(preset)}
+                  disabled={saving}
+                >
+                  <Plus size={16} /> Add Student to this Class
+                </button>
+              </>
             )}
           >
             <div className="modal-meta">
@@ -449,40 +550,24 @@ export default function AdminStudents() {
       )}
 
       {modal?.mode === 'bulk' && (
-        <Modal
-          title="Bulk Add Students"
+        <BulkAddModal
+          classes={classes}
           onClose={() => setModal(null)}
-          footer={
-            <button className="btn btn-secondary" onClick={() => setModal(null)}>Cancel</button>
-          }
-        >
-          {bulkError && <div className="login-error" style={{ marginBottom: 'var(--sp-md)' }}>{bulkError}</div>}
-          <div className="form-group">
-            <label className="form-label">Upload a spreadsheet (.csv or .xlsx)</label>
-            <input
-              type="file"
-              className="form-input"
-              accept=".csv,.xlsx"
-              disabled={saving}
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                e.target.value = ''; // allow re-choosing the same file after a failed attempt
-                if (file) handleBulk(file);
-              }}
-              aria-label="Bulk upload file"
-            />
-          </div>
-          <div className="text-sm" style={{ marginTop: 'var(--sp-sm)' }}>
-            <a href="#" onClick={(e) => { e.preventDefault(); downloadTemplate(); }}>
-              Download template
-            </a>
-          </div>
-          <div className="text-sm text-muted" style={{ marginTop: 'var(--sp-sm)' }}>
-            Header row required, in this order: {BULK_COLUMNS.join(', ')}. RollNumber is optional —
-            blank cells get the next available roll number for that class/section. Up to 200 students
-            per file. Added atomically — if any row is invalid, nothing is saved.
-          </div>
-        </Modal>
+          // Refetch so the class card count and the shared list both update.
+          onAdded={async () => { await load(); }}
+        />
+      )}
+
+
+      {creatingClass && (
+        <CreateClassModal
+          levels={levels}
+          onClose={() => setCreatingClass(false)}
+          // The class card must appear immediately: refresh the page data and
+          // the shared options list the dropdowns read.
+          onCreated={async () => { await load(); }}
+          onLevelAdded={async () => { await load(); }}
+        />
       )}
 
       {viewing && (
@@ -497,6 +582,39 @@ export default function AdminStudents() {
           user={resettingUser}
           onClose={() => setResettingUser(null)}
         />
+      )}
+
+      {deleteClass && (
+        <ConfirmModal
+          title={`Delete ${deleteClass.class}?`}
+          confirmLabel="Delete"
+          cancelLabel="Cancel"
+          tone="danger"
+          onClose={() => setDeleteClass(null)}
+          onConfirm={async () => {
+            const target = deleteClass;
+            setDeleteClass(null);
+            try {
+              const res = await api.delete(`/admin/classes/${target.id}`);
+              toast.success(res.data.message);
+              // Refresh so the card disappears and every dropdown loses it.
+              await load();
+              setModal((m) => {
+                if (m?.mode !== 'roster') return m;
+                return m.cls.id === target.id ? null : m;
+              });
+            } catch (err) {
+              // The server refuses anything with data and says what is in the way,
+              // so its message is the useful half of the answer.
+              toast.error(err.response?.data?.message || 'Could not delete the class.');
+            }
+          }}
+        >
+          <p>
+            This class has no students and no records. Deleting it removes it from
+            every class list. This cannot be undone.
+          </p>
+        </ConfirmModal>
       )}
 
       {confirm && (

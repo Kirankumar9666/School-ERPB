@@ -80,6 +80,29 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ☰ — top-bar menu button. Hidden by default and revealed ONLY by the same
+   `.viewport-mobile` class that decides the sidebar's layout, so the two can
+   never disagree: no hamburger on desktop (the panel's own ☰ is always
+   reachable there), and never a phone with no way to reopen the drawer it just
+   hid. `display: none` also keeps it out of the tab order while hidden. */
+.navbar-menu-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;               /* the title shrinks, the control never does */
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.navbar-menu-btn:hover { background: var(--paper); }
+.navbar-menu-btn:focus-visible { outline: 2px solid var(--oxblood); outline-offset: 2px; }
+.app-layout.viewport-mobile .navbar-menu-btn { display: inline-flex; }
+
 /* ═══════════════════════════════════════════════════ SIDEBAR */
 /* Ink-dark registry panel with an oxblood active rail. */
 .sidebar {
@@ -95,17 +118,44 @@
   /* Width animates between expanded and rail; `overflow: hidden` clips (rather
      than reflows) the labels mid-transition so nothing jumps or overlaps. */
   overflow: hidden;
-  transition: width var(--drawer-speed) ease;
+  transition: width var(--drawer-speed) ease, transform var(--drawer-speed) ease;
 }
-/* Collapsed → icon-only rail. The panel NEVER leaves the screen, so the ☰
-   toggle inside its header stays reachable on mouse, touch and keyboard. */
+/* Collapsed → icon-only rail (DESKTOP: below the breakpoint the rules further
+   down take the whole panel off-canvas instead). While it stays on screen the ☰
+   toggle in its header is always reachable on mouse, touch and keyboard. */
 .app-layout.sidebar-closed .sidebar { width: var(--sidebar-rail-w); }
 
-/* ☰ — pinned TOP-LEFT, directly above the logo icon, in BOTH states: the panel
-   is left-anchored and this row's padding never changes, so the button sits at
-   the exact same pixel position whether the panel is expanded or a rail (only
-   the sidebar's width animates). Dark-theme sibling of the old topbar
-   hamburger: same 34px key, same 18px icon; aria-expanded mirrors the state. */
+/* ── Small screens: "closed" is FULLY OFF-CANVAS, not an icon rail ───────
+   The desktop rail rule above is deliberately unscoped, which is what left a
+   64px strip of logo/avatar/nav icons squeezed onto a 427px phone. Below the
+   breakpoint the panel slides out of view instead.
+
+   • width is held at --drawer-w in BOTH mobile states so only `transform`
+     animates — narrowing to the rail while sliding out looked broken.
+   • visibility flips AFTER the slide (delayed 0s/220ms), so the panel still
+     animates away yet the moment it is gone its links leave the tab order and
+     cannot take focus from the page behind.
+   • the rule carries 4 classes, so it beats `.app-layout.sidebar-closed
+     .sidebar` (3) regardless of source order. */
+.app-layout.viewport-mobile.sidebar-closed .sidebar {
+  width: var(--drawer-w);
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition: transform var(--drawer-speed) ease, visibility 0s linear var(--drawer-speed);
+}
+/* Open on a small screen: a full-height overlay drawer with the EXPANDED
+   layout. There is no `.sidebar-closed` class in this state, so none of the
+   icon-rail rules (hidden labels, hidden brand text, hidden username) apply. */
+.app-layout.viewport-mobile.sidebar-open .sidebar { width: var(--drawer-w); }
+
+/* ☰ — pinned TOP-LEFT, directly above the logo icon, in BOTH desktop states:
+   the panel is left-anchored and this row's padding never changes, so the button
+   sits at the exact same pixel position whether the panel is expanded or a rail
+   (only the sidebar's width animates). Dark-theme sibling of the old topbar
+   hamburger: same 34px key, same 18px icon; aria-expanded mirrors the state.
+   Below the breakpoint the panel is off-canvas when closed, so this button is
+   only reachable once the drawer is open — there it reads as the drawer's close
+   control, and .navbar-menu-btn in the top bar is what opens it. */
 .sidebar-top {
   display: flex;
   align-items: center;
@@ -319,6 +369,29 @@
 .btn-sm { padding: 5.5px 11px; font-size: 12.5px; }
 .btn-full { width: 100%; }
 
+/* A button that reveals a section (the payroll month's "History"), or that
+   switches a view mode (the staff list's Active-only / Showing all). The pressed
+   look is driven off the ARIA attribute rather than a second class, so the state
+   the screen reader announces and the state that is drawn cannot drift apart.
+   Colours are the same oxblood-soft "selected" idiom as `.mk-chip.active`.
+
+   Both attributes are listed because they mean different things and a toggle
+   button needs the right one: `aria-expanded` for a control that reveals a
+   section, `aria-pressed` for one that stays in place and toggles a mode. A
+   single pressed-look rule serves both, so there is still one place to look for
+   it. */
+.btn-toggle[aria-expanded='true'],
+.btn-toggle[aria-pressed='true'] {
+  background: var(--oxblood-soft);
+  color: var(--oxblood);
+  border-color: var(--oxblood);
+  box-shadow: 0 0 0 1px var(--oxblood);
+}
+.btn-toggle[aria-expanded='true']:hover,
+.btn-toggle[aria-pressed='true']:hover { background: var(--oxblood-soft); color: var(--oxblood); }
+/* The chevron rotates via an inline transform; this only softens the flip. */
+.btn-toggle .toggle-caret { transition: transform var(--transition); }
+
 /* ═══════════════════════════════════════════════════ FORMS */
 .form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: var(--sp-lg); }
 .form-label {
@@ -332,7 +405,7 @@
 .form-input {
   width: 100%;
   padding: 9px 12px;
-  background: #fffdf6;
+  background: var(--input-surface);
   border: 1px solid var(--line-2);
   border-radius: var(--r-sm);
   font-size: 14px;
@@ -344,6 +417,23 @@
   outline: none;
   border-color: var(--ink-2);
   box-shadow: 0 0 0 3px rgba(138, 51, 36, 0.1);
+}
+
+/* The <option> rows of any <select.form-input>.
+   The closed control inherits `.form-input`'s colours, but an OPEN dropdown is
+   drawn by the OS from the control's native colours, NOT from the select's CSS
+   `color`. Where the platform's default popup is dark, the rows come out in
+   near-white text over the light background — invisible. Stating both halves
+   here (dark ink on the field surface) keeps the list readable on every
+   platform and theme, from one rule rather than in each component. */
+.form-input option {
+  background: var(--input-surface);
+  color: var(--ink);
+}
+/* A disabled option (e.g. the "Select class" placeholder) should still be
+   legible — dimmed, but not invisible. */
+.form-input option:disabled {
+  color: var(--ink-3);
 }
 
 .input-wrapper {
@@ -604,6 +694,95 @@
   }
   .modal-overlay:has(.modal--wide) { padding: var(--sp-md); align-items: stretch; }
 }
+
+/* ═══════════════════════════════════════════════════════════════ TOASTS
+   The app's own toast look. react-hot-toast injects a default bar style
+   (white #fff, 8px radius, generic #363636 text) from its own stylesheet at
+   runtime, so every rule here is scoped under `.toast-stack` — two class
+   selectors, which outranks that single injected class whatever order the two
+   stylesheets end up in. The recipe deliberately mirrors `.att-note` and
+   `.announcement-card`: cream surface, hairline border, crisp --r-sm corners
+   and a thick coloured left accent.
+
+   The library also pins the stack's position with INLINE styles, which no class
+   rule can beat — so the container reads its geometry from these custom
+   properties instead (see `containerStyle` in ToastHost.jsx). They live here,
+   next to the rules that consume them, so the phone override below is
+   unambiguous in the cascade. */
+:root {
+  /* Published at runtime by ToastHost from the measured sticky header, so the
+     stack always clears it — including the two-row phone header. 58px is the
+     desktop fallback, so even the first paint is already below the bar. */
+  --navbar-h: 58px;
+  --toast-inset: 16px;                        /* gap from the viewport edge */
+  --toast-top: calc(var(--navbar-h) + var(--sp-md));
+}
+.toast-stack .toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-sm);
+  max-width: min(400px, calc(100vw - 2 * var(--toast-inset)));
+  padding: 10px 10px 10px 12px;
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--slate);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-md);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+  transition: opacity 230ms ease, box-shadow var(--transition);
+  opacity: 0;
+}
+.toast-stack .toast[data-visible='true'] { opacity: 1; }
+/* Errors read in the same red family as the announcement card's left accent. */
+.toast-stack .toast--error   { border-left-color: var(--red); }
+.toast-stack .toast--success { border-left-color: var(--green); }
+
+.toast-stack .toast-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--slate);
+}
+.toast-stack .toast--error .toast-icon   { color: var(--red); }
+.toast-stack .toast--success .toast-icon { color: var(--green); }
+
+.toast-stack .toast-msg { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+
+/* Close control — the ✕ every toast carries, so nothing persists until its
+   timer runs out. Matches the quiet secondary buttons elsewhere. */
+.toast-stack .toast-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: -2px -2px 0 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: color var(--transition), background var(--transition), border-color var(--transition);
+}
+.toast-stack .toast-close:hover {
+  color: var(--ink);
+  background: var(--paper-2);
+  border-color: var(--line);
+}
+.toast-stack .toast-close:focus-visible {
+  outline: 2px solid var(--oxblood);
+  outline-offset: 1px;
+}
+
+/* Phones: inset from both edges so a long message wraps to the full width. */
+@media (max-width: 640px) {
+  :root { --toast-inset: 12px; }
+  .toast-stack .toast { max-width: none; }
+}
 /* ═══════════════════════════════════════════════════ LOGIN */
 .login-page {
   display: flex;
@@ -671,7 +850,10 @@
 .forgot-note {
   margin-top: var(--sp-lg);
   font-size: 12.5px;
-  color: var(--ink-3);
+  /* --ink-2, not --ink-3: the dim token (#8f866f) is only 3.43:1 on the card
+     background, below the 4.5:1 WCAG AA minimum for body text. This line ships
+     on the login page, so it must be readable; --ink-2 is 7.6:1. */
+  color: var(--ink-2);
   text-align: center;
 }
 
@@ -784,7 +966,7 @@
   font-size: 12.5px;
   color: var(--ink-2);
 }
-﻿/* ============= LIST ROWS (docs / leaves / holidays) ============= */
+/* ============= LIST ROWS (docs / leaves / holidays) ============= */
 .doc-item {
   display: flex;
   align-items: center;
@@ -1065,11 +1247,19 @@
 .att-result:last-child { border-bottom: none; }
 .att-result:hover { background: #f6f2e8; }
 .att-result:focus-visible { outline: 2px solid var(--oxblood); outline-offset: -2px; }
+/* A person's row carries a long designation on the right — let that wrap and
+   stay right-aligned rather than squeezing the name being picked. */
+.att-result > span:first-child { min-width: 0; }
+.att-result > span:last-child { text-align: right; }
 
 /* Selected group header */
 .att-class-head {
   display: flex;
-  align-items: center;
+  /* Top-align the two halves of this row: the class title (which can wrap to
+     two or three lines) and the Date / Session / Change class toolbar. Centring
+     them left the toolbar floating mid-block, level with the title's middle
+     line instead of its first. */
+  align-items: flex-start;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--sp-md);
@@ -1077,6 +1267,77 @@
   margin-bottom: var(--sp-lg);
   border-bottom: 1px solid var(--line);
 }
+
+/* Date / Session / Change-class toolbar — the right-hand half of that row. Each
+   control is a labelled group so the FN/AN toggle never has to guess what it
+   switches; the vertical rule keeps the eye from reading it as part of the
+   date field. */
+.att-toolbar {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--sp-sm) var(--sp-md);
+}
+.att-tool-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+/* Field label — the same quiet small-caps treatment the forms use. */
+.att-tool-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.att-tool-divider {
+  align-self: stretch;
+  width: 1px;
+  margin: 18px 2px 0;
+  background: var(--line);
+}
+.att-tool-change { align-self: flex-end; }
+
+/* FN / AN session toggle — the same two-segment pill as the roster's
+   Present/Absent switch, with the active session filled in oxblood (the app's
+   primary) rather than a status colour, because a session is a choice, not a
+   mark. */
+.att-session {
+  display: inline-flex;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-full);
+  overflow: hidden;
+  background: var(--card);
+}
+.att-session-btn {
+  border: none;
+  background: transparent;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  padding: 7px 18px;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.att-session-btn + .att-session-btn { border-left: 1px solid var(--line-2); }
+.att-session-btn:hover:not(:disabled):not(.active) { color: var(--ink); background: var(--paper-2); }
+.att-session-btn:focus-visible { outline: 2px solid var(--oxblood); outline-offset: -2px; z-index: 1; }
+.att-session-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.att-session-btn.active { background: var(--oxblood); color: var(--card); }
+
+/* One line under the header naming the session being marked, so a saved FN
+   roster and a fresh AN roster are never mistaken for each other. */
+.att-session-line {
+  margin: calc(-1 * var(--sp-sm)) 0 var(--sp-md);
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.att-session-line b { font-weight: 600; color: var(--ink); }
 
 /* Confirmation / lock notes */
 .att-note {
@@ -1236,6 +1497,33 @@
 .att-cal-day.halfday { background: rgba(197, 160, 42, 0.16); border-color: var(--gold); color: var(--ink-2); }
 .att-cal-day.holiday { background: var(--paper-2); border-color: var(--line); color: var(--ink-3); }
 .att-cal-day.empty { background: transparent; border-color: transparent; }
+
+/* Weekly off day editor (Admin Calendar) — a compact weekday toggle row. */
+.weekly-off-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sm);
+}
+.weekly-off-day {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--card);
+  color: var(--ink-2);
+  font-size: 13px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.weekly-off-day.active {
+  background: var(--paper-2);
+  border-style: dashed;
+  border-color: var(--line-2);
+  color: var(--ink);
+  font-weight: 600;
+}
 
 /* ═══════════════════════════════════════════════ CALENDAR + REMINDERS
    The shared AttendanceCalendarWithReminders layout (Student Attendance,
@@ -1430,7 +1718,16 @@
     column-gap: var(--sp-md);
   }
   .navbar-left { flex: 1 1 100%; }
-  .navbar-right { flex: 1 1 100%; justify-content: space-between; white-space: normal; }
+  /* Time and date may drop onto their own line rather than be clipped: at
+     ~375px the full "Thursday, 8 October 2026" plus the clock can exceed the
+     one row the old rule allowed. */
+  .navbar-right {
+    flex: 1 1 100%;
+    justify-content: space-between;
+    white-space: normal;
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
   .navbar-title {
     min-width: 0;
     max-width: 100%;
@@ -1445,6 +1742,17 @@
     white-space: nowrap;
   }
   .navbar-time { font-size: 10.5px; }
+
+  /* Attendance toolbar: the date field, the FN/AN toggle and "Change class" no
+     longer fit on one line beside the class title, so they take the full width
+     below it and the vertical rule between Date and Session is dropped. */
+  .att-toolbar {
+    width: 100%;
+    align-items: flex-start;
+  }
+  .att-tool-divider { display: none; }
+  .att-tool-group { flex: 1 1 auto; }
+  .att-tool-change { align-self: flex-end; }
 
   /* Tighter chrome so the content keeps its width */
   .card { padding: var(--sp-lg); }
@@ -1565,4 +1873,430 @@
   color: var(--clr-danger);
   font-size: 12px;
   margin-top: 4px;
+}
+/* The positive counterpart: a live preview of where a payment will land sits in
+   the same position as the error it replaces, so the field does not jump. */
+.field-ok {
+  color: var(--clr-success);
+  font-size: 12.5px;
+  line-height: 1.45;
+  margin-top: 4px;
+}
+/* ── Bulk upload row errors ───────────────────────────────────────────────────
+   The server answers a bad file with per-row, per-column detail. It has to be
+   readable on a phone without a table, so each row is one line: a bold row label
+   and the columns to fix. */
+.bulk-row-errors {
+  margin-top: calc(-1 * var(--sp-sm));
+  margin-bottom: var(--sp-md);
+  border: 1px solid var(--red-soft);
+  border-radius: var(--radius-sm);
+  background: var(--red-soft);
+  overflow: hidden;
+}
+.bulk-row-error {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px var(--sp-sm);
+  padding: 8px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  border-top: 1px solid var(--red-soft);
+  color: var(--ink-2);
+}
+.bulk-row-error:first-child { border-top: none; }
+.bulk-row-error-label {
+  font-weight: 700;
+  color: var(--red);
+  min-width: 60px;
+}
+
+/* ═══════════════════════════════════════════ MARKS ENTRY (Employee Portal) */
+/* The teacher's Marks Entry page. Everything here is deliberately plain: three
+   roster columns, one narrow numeric input, and messages that have to stay
+   readable at ~427px — where a four-column admin-style table would either
+   overflow or need a horizontal scroll to read a single mark. */
+
+/* ── Three-up field row (Exam / Date / Max Marks) ─────────────────────────── */
+.form-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--sp-md);
+}
+@media (max-width: 640px) {
+  .form-grid-3 { grid-template-columns: 1fr; }
+}
+
+/* ── Teaching-assignment chips ───────────────────────────────────────────────
+   One chip per (class, subject) pair from the timetable, e.g.
+   "10 – Class A · Mathematics". A button rather than a static badge because
+   the chip is also the quickest way to switch pair. */
+.mk-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.mk-chip {
+  padding: 7px 13px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  background: var(--paper-2);
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.mk-chip:hover { background: #e2dccb; color: var(--ink); }
+.mk-chip.active {
+  background: var(--oxblood-soft);
+  color: var(--oxblood);
+  border-color: var(--oxblood);
+  box-shadow: 0 0 0 1px var(--oxblood);
+}
+.mk-chip:focus-visible { outline: 2px solid var(--oxblood); outline-offset: 2px; }
+
+/* ── Locked subject field ───────────────────────────────────────────────────
+   Stands in for a select when the timetable gives this teacher exactly one
+   subject in the class. A padlock makes it obvious the value is not editable
+   and where it came from, instead of presenting a disabled dropdown the teacher
+   might try to change. */
+.mk-locked {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--paper-2);
+  color: var(--ink-2);
+  font-weight: 600;
+  cursor: default;
+}
+.mk-locked svg { flex: none; color: var(--ink-3); }
+
+/* ── Roster grid ─────────────────────────────────────────────────────────────
+   The table wrapper is nested in a card with the border stripped, so the grid
+   reads as one surface. `min-width` is deliberately NOT set: Roll No + Name +
+   Obtained fit a 320px phone, and a min-width would reintroduce the horizontal
+   scroll this layout exists to avoid. */
+.mk-cell { display: flex; flex-direction: column; min-width: 84px; }
+.mk-input { text-align: center; font-variant-numeric: tabular-nums; }
+.mk-input--bad {
+  border-color: var(--red);
+  background: var(--red-soft);
+  color: var(--red);
+  font-weight: 700;
+}
+.mk-input--bad:focus {
+  border-color: var(--red);
+  box-shadow: 0 0 0 2px var(--red-soft);
+}
+.mk-row-error {
+  display: block;
+  margin-top: 4px;
+  color: var(--red);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+/* The live "3 of 2 entered" pill. It sits inline after the roster's section
+   title, which is styled to stretch its own trailing rule — so the counter
+   stays anchored to the words it counts and the rule fills what is left. */
+.mk-count {
+  padding: 2px 8px;
+  color: var(--ink-2);
+  background: var(--paper-2);
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── Action row ──────────────────────────────────────────────────────────────
+   Buttons wrap rather than shrink, so a long subject name cannot squeeze
+   "Save Marks" down to an unlabelled sliver. */
+.mk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-md);
+  margin-top: var(--sp-lg);
+}
+
+/* ── Already-saved list ──────────────────────────────────────────────────────
+   One card per saved (exam, subject) batch. Shared by BOTH marks pages: the
+   Employee Portal scopes it to one (class, subject) it teaches, the Admin Panel
+   covers every subject the class has marks in and carries the subject on the
+   card. Same look, same click-to-reopen — a card is a batch, and a batch is the
+   same thing whoever is looking at it. */
+.mk-saved-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: var(--sp-md);
+}
+.mk-saved-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px 14px;
+  text-align: left;
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.mk-saved-item:hover { background: #e2dccb; border-color: var(--line-2); }
+.mk-saved-item:focus-visible { outline: 2px solid var(--oxblood); outline-offset: 2px; }
+/* The batch currently open in the editor. Marked with a left rule in the accent
+   colour rather than a fill, so it stays on the same paper as the unopened cards
+   and the difference reads as "selected", not "disabled". */
+.mk-saved-item--open { border-color: var(--oxblood); border-left: 3px solid var(--oxblood); }
+.mk-saved-name { font-weight: 700; font-size: 13.5px; color: var(--ink); }
+.mk-saved-stats { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
+
+/* ── Save confirmation ───────────────────────────────────────────────────────*/
+.mk-confirm { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+.mk-confirm svg { color: var(--green); }
+.mk-confirm-msg { font-size: 15px; font-weight: 700; color: var(--ink); }
+.mk-confirm-list {
+  margin: 4px 0 0;
+  padding-left: 1.1rem;
+  text-align: left;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.mk-confirm-list li { margin-bottom: 3px; }
+
+/* ── Template download buttons ───────────────────────────────────────────────*/
+.mk-downloads { display: flex; flex-wrap: wrap; gap: var(--sp-md); }
+
+/* ── Edit-window banner ──────────────────────────────────────────────────────
+   The live state of the (class, subject, exam) batch currently on screen: how
+   long is left to edit it, or that it is locked. Deliberately shaped like
+   `.att-note` — the attendance window's banner — so "your confirmation is
+   ageing" looks the same wherever it appears, and the `.locked` variant uses
+   that file's gold left-border rather than inventing a second warning colour.
+   The scope (class · subject) is pushed to the trailing edge and wraps away on a
+   phone rather than squeezing the countdown, which must never be clipped. */
+.mk-window {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-sm);
+  padding: 9px 14px;
+  margin-bottom: var(--sp-md);
+  font-size: 13px;
+  color: var(--ink-2);
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--slate);
+  border-radius: var(--r-sm);
+}
+.mk-window.locked { border-left-color: var(--gold); background: var(--gold-soft); color: var(--ink); }
+.mk-window svg { flex: none; color: var(--slate); }
+.mk-window.locked svg { color: var(--gold); }
+.mk-window-text { font-weight: 600; color: var(--ink); }
+.mk-window-scope { margin-left: auto; color: var(--ink-3); font-size: 12.5px; }
+
+/* The countdown line inside the save-confirmation dialog: an inline icon beside
+   the sentence, so it reads as part of the list rather than a floating badge. */
+.mk-confirm-window { display: flex; align-items: flex-start; gap: 6px; }
+.mk-confirm-window svg { flex: none; margin-top: 2px; color: var(--slate); }
+
+/* ── Phone: ~427px and down ──────────────────────────────────────────────────
+   The roster stays three columns at every width — the numeric cell is the only
+   one that needs to give ground, so it shrinks rather than the table scrolling
+   sideways. The cell padding is scoped to `.mk-roster` so this page's narrow
+   grid cannot loosen or tighten every other table in the app. */
+@media (max-width: 480px) {
+  .mk-chip { padding: 6px 10px; font-size: 11.5px; }
+  .mk-saved-list { grid-template-columns: 1fr; }
+  .mk-actions .btn { flex: 1 1 auto; justify-content: center; }
+  .mk-cell { min-width: 72px; }
+  .mk-roster th, .mk-roster td { padding: 9px 8px; }
+  /* No room for a trailing scope on a phone — it drops below the countdown
+     instead of competing with it for one line. */
+  .mk-window-scope { margin-left: 0; width: 100%; }
+}
+
+/* ══════════════════════════════════ CLAMPED LONG TEXT (shared) */
+/* Two-line clamping for long free text in a repeated row, with a "View more"
+   link that appears only when the text is really clipped.
+
+   The clamp is a display concern, so it is pure CSS: `-webkit-line-clamp` is the
+   only engine that implements the "show N lines then an ellipsis" behaviour, and
+   every browser that matters (and every current Firefox) supports it. The
+   `display: -webkit-box` line is required — the clamp does nothing without it.
+   `--clamp-lines` is set inline by the component so the same rules serve a
+   1-line or 3-line clamp. */
+.clamp { min-width: 0; }
+.clamp-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--clamp-lines, 2);
+  line-clamp: var(--clamp-lines, 2);
+  overflow: hidden;
+  /* `pre-line` is what makes a multi-line reason survive at all. The default
+     inherited value is `normal`, which collapses every newline into a space —
+     that is why typed line breaks used to reach the table as one flowing
+     paragraph, and why the 2-line clamp then "fit" (the collapsed text was
+     short) so the "View more" link never appeared. `pre-line` (not `pre-wrap`)
+     keeps the author's line breaks and indentation while still collapsing runs
+     of spaces, so a wrapped line does not gain a stray leading space. */
+  white-space: pre-line;
+  /* `anywhere` (stronger than `break-word`) so a long unbroken string — a URL,
+     a token, a run of zeroes — breaks even at the very start of a line, where
+     `break-word` refuses to. Without it such a string pushes the table cell
+     wider than the viewport instead of wrapping. */
+  overflow-wrap: anywhere;
+}
+
+/* The "View more" control: a text link in the oxblood accent, matching how the
+   rest of the app marks a secondary/tertiary action. It is a real <button>, so
+   it is keyboard reachable and gets a visible focus ring — a bare <a> with no
+   href would not be. */
+.clamp-more {
+  /* A tight leading box so the link costs as little row height as possible: the
+     text is already capped at 2 lines, and the link is the only thing that can
+     still make one row taller than its neighbours. A short margin plus a compact
+     line-height keeps the tallest row well under an unclamped reason's height. */
+  display: inline-block;
+  margin-top: 2px;
+  line-height: 1.2;
+  padding: 0;
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--oxblood);
+  background: none;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.clamp-more:hover { color: var(--ink); border-bottom-color: currentColor; }
+.clamp-more:focus-visible { outline: 2px solid var(--oxblood); outline-offset: 2px; border-radius: 2px; }
+
+/* ══════════════════════════════════ LEAVE REASON POPUP */
+/* The popup's own content styles. Geometry, focus trap, Esc and backdrop
+   dismissal all come from the shared `Modal`; nothing here is modal machinery. */
+
+/* Admin-only "whose request is this" header. */
+.lr-who {
+  padding-bottom: var(--sp-md);
+  margin-bottom: var(--sp-md);
+  border-bottom: 1px solid var(--line);
+}
+.lr-who-name { font-family: var(--font-display); font-size: 17px; color: var(--ink); }
+
+/* The summary context, as a wrapping row of chips (leave type, From → To,
+   applied-on, status). `flex-wrap` reflows to as many rows as needed rather than
+   overflowing at phone width, and `min-width: 0` lets the date chip shrink so a
+   long range stays inside the panel. */
+.lr-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-sm);
+  margin: 0 0 var(--sp-lg);
+}
+.lr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 10px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+/* Tabular figures so "12 Mar 2026 → 14 Mar 2026" does not shimmer between
+   states, and the arrow dims so the dates stay the thing being read. */
+.lr-chip-dates { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lr-chip-arrow { color: var(--ink-3); }
+
+/* The full reason, exactly as typed: `pre-wrap` keeps every line break, blank
+   line and run of leading spaces, and unlike the table cell it does NOT clamp —
+   this is the full text, so the popup is the one place tall content is allowed
+   to scroll. `overflow-wrap: anywhere` breaks a long unbroken string (a URL, a
+   token) anywhere rather than pushing the panel past the viewport, which is the
+   only overflow risk here once the text can contain newlines. */
+.lr-full {
+  padding: var(--sp-md);
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--oxblood);
+  border-radius: var(--r-md);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* ── A table cell holding a clamped reason ─────────────────────────────────
+   A table sizes its columns by intrinsic content width, and a `-webkit-box`
+   element still reports the *full unwrapped* text as its max-content width. Left
+   alone, one 500-character reason would therefore demand a very wide column and
+   push the whole table into horizontal scroll. Capping the cell keeps the column
+   proportionate and lets the text wrap to two lines, which is the entire point
+   of clamping it. */
+.reason-cell { max-width: 340px; }
+.reason-cell .clamp { max-width: 100%; }
+
+/* ── Label + live counter on one line ───────────────────────────────────────
+   Shared by any textarea with a maxLength, so the counter's position and
+   styling are decided once. */
+.label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-md);
+}
+.label-row .form-label { margin-bottom: 0; }
+.field-counter {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;  /* stable width as the digits tick */
+  white-space: nowrap;
+}
+/* Turns amber approaching the cap, red past it. `aria-live="polite"` is on the
+   element in JSX so a screen reader announces the count change without
+   interrupting typing. */
+.field-counter.near { color: var(--clr-warning); font-weight: 600; }
+/* Turns red if a paste ever exceeds the cap, so a silently truncated submission
+   is visible rather than discovered after the fact. */
+.field-counter.over { color: var(--red); font-weight: 700; }
+
+/* ── Inline help and neutral notes ───────────────────────────────────────────
+   Two small generic pieces that would otherwise be re-invented per screen (and
+   already were: the attendance note is named after the attendance screen). */
+.form-help {
+  display: block;
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+.info-note {
+  padding: 10px 14px;
+  margin-bottom: var(--sp-md);
+  font-size: 13px;
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--slate);
+  border-radius: var(--r-sm);
+}
+.info-note ul { margin: 6px 0 0; padding-left: 18px; }
+
+@media (max-width: 480px) {
+  .reason-cell { max-width: 220px; }
+  /* The chips wrap on their own already; at phone width the date chip is the one
+     that could push the panel wide, so it is allowed to wrap internally instead
+     of holding the whole range on one line. */
+  .lr-chip { font-size: 10px; padding: 3px 8px; }
+  .lr-chip-dates { white-space: normal; }
+  .lr-full { font-size: 13.5px; padding: var(--sp-sm); }
 }

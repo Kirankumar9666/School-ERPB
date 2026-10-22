@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { ClipboardList } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
+import LoadErrorState from '../../components/LoadErrorState';
+import { useLoadState } from '../../utils/useLoadState';
 
 /** Circular progress indicator (SVG) */
 const circular = (percent, color = 'var(--clr-primary)') => {
@@ -28,16 +30,29 @@ const circular = (percent, color = 'var(--clr-primary)') => {
 export default function StudentMarks() {
   const { user } = useAuth();
   const [marks, setMarks] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { loading, setLoading, error, reloadKey, retry, fail } = useLoadState();
 
   useEffect(() => {
     if (!user?.linkedEntityId) return;
     api.get(`/students/${user.linkedEntityId}/marks`)
       .then((r) => setMarks(r.data.data || []))
+      .catch(fail)
       .finally(() => setLoading(false));
-  }, [user]);
+  }, [user, reloadKey, fail, setLoading]);
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
+
+  if (error) {
+    return (
+      <LoadErrorState
+        title="Marks / Progress Card"
+        subtitle="Academic performance across exams"
+        detail={error}
+        onRetry={retry}
+        icon={ClipboardList}
+      />
+    );
+  }
 
   return (
     <div className="page fade-in">

@@ -1,9 +1,9 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { lazy, Suspense } from 'react'
-import { Toaster } from 'react-hot-toast'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { ROLES, EMPLOYEE_ROLES } from './constants/roles'
 import ProtectedLayout from './components/ProtectedLayout'
+import ToastHost from './components/ToastHost'
 
 import './styles/components.css'
 import './index.css'
@@ -30,7 +30,7 @@ const EmployeeAttendance = lazy(() => import('./pages/employee/EmployeeAttendanc
 const EmployeeLeave = lazy(() => import('./pages/employee/EmployeeLeave'))
 const EmployeePayroll = lazy(() => import('./pages/employee/EmployeePayroll'))
 const EmployeeTimetable = lazy(() => import('./pages/employee/EmployeeTimetable'))
-const EmployeeClasses = lazy(() => import('./pages/employee/EmployeeClasses'))
+const EmployeeMarks = lazy(() => import('./pages/employee/EmployeeMarks'))
 const EmployeeAnnouncements = lazy(() => import('./pages/employee/EmployeeAnnouncements'))
 const EmployeeDocuments = lazy(() => import('./pages/employee/EmployeeDocuments'))
 
@@ -50,6 +50,8 @@ const AdminAchievements = lazy(() => import('./pages/admin/AdminAchievements'))
 const AdminDocuments = lazy(() => import('./pages/admin/AdminDocuments'))
 const AdminUsers = lazy(() => import('./pages/admin/AdminUsers'))
 const AdminPayroll = lazy(() => import('./pages/admin/AdminPayroll'))
+const AdminClassManagement = lazy(() => import('./pages/admin/AdminClassManagement'))
+const AdminFeeDues = lazy(() => import('./pages/admin/AdminFeeDues'))
 
 /** Map role → home path (single source of truth) */
 const ROLE_HOME = {
@@ -110,17 +112,38 @@ export default function App() {
             <Route path="/employee/leave" element={<EmployeeLeave />} />
             <Route path="/employee/payroll" element={<EmployeePayroll />} />
             <Route path="/employee/timetable" element={<EmployeeTimetable />} />
-            <Route path="/employee/classes" element={<EmployeeClasses />} />
+            {/* "My Classes" was removed (2026-09-29). The URL redirects to the
+                dashboard instead of 404ing so an old bookmark, a shared link or
+                a stale browser history entry still lands on a working page —
+                and it also fixes the endless spinner the page showed for any
+                employee without a linked entity ID. The redirect sits INSIDE the
+                ProtectedLayout, so it is behind the same auth + role gate as
+                every other employee route: an unauthenticated visitor is sent to
+                the login page by the layout, not bounced to a dashboard they
+                cannot see. `replace` keeps the dead URL out of history, so Back
+                from the dashboard does not ping-pong between the two. */}
+            <Route path="/employee/classes" element={<Navigate to="/employee" replace />} />
+            <Route path="/employee/marks" element={<EmployeeMarks />} />
             <Route path="/employee/announcements" element={<EmployeeAnnouncements />} />
             <Route path="/employee/documents" element={<EmployeeDocuments />} />
+          </Route>
+
+          {/* Accountant's fee desk — the same Fee Dues page the admin panel uses
+              (it reads the shared /fees endpoint), but reached from the employee
+              portal and gated to the accountant role so a teacher or librarian
+              cannot open a money screen at all. */}
+          <Route element={<ProtectedLayout allowedRoles={[ROLES.ACCOUNTANT]} navTitle="Employee Portal" navSubtitle="Welcome back" />}>
+            <Route path="/employee/fees" element={<AdminFeeDues />} />
           </Route>
 
           {/* Admin panel */}
           <Route element={<ProtectedLayout allowedRoles={[ROLES.ADMIN]} navTitle="Admin Panel" navSubtitle="Management console" />}>
             <Route path="/admin" element={<AdminDashboard />} />
             <Route path="/admin/students" element={<AdminStudents />} />
+            <Route path="/admin/fees" element={<AdminFeeDues />} />
             <Route path="/admin/employees" element={<AdminEmployees />} />
             <Route path="/admin/payroll" element={<AdminPayroll />} />
+        <Route path="/admin/classes" element={<AdminClassManagement />} />
             <Route path="/admin/attendance" element={<AdminAttendance />} />
             <Route path="/admin/marks" element={<AdminMarks />} />
             <Route path="/admin/timetable" element={<AdminTimetable />} />
@@ -139,8 +162,11 @@ export default function App() {
         </Suspense>
         {/* Toasts are fired from many pages (upload success/failure, deletes,
             form validation). Without this single mount react-hot-toast renders
-            nothing, so successful actions looked like the button did nothing. */}
-        <Toaster position="top-right" toastOptions={{ duration: 4000 }} />
+            nothing, so successful actions looked like the button did nothing.
+            ToastHost owns the app's toast look, the per-message dedup that
+            stops duplicates stacking, and the offset that keeps the stack clear
+            of the header bar. */}
+        <ToastHost />
       </BrowserRouter>
     </AuthProvider>
   )

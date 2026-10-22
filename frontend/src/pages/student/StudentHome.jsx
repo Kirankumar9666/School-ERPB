@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 import { CalendarDays, BookOpen, ClipboardList, Clock, Bell, Trophy, Sun, Sunrise, Sunset, CalendarCheck, Banknote, PartyPopper } from 'lucide-react';
 import { monthShift, todayISO } from '../../utils/date';
+import { feeRowLabel } from '../../utils/feeFormat';
 
 const formatINR = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
 
@@ -26,6 +27,9 @@ const OVERVIEW_CARDS = [
 export default function StudentHome() {
   const { user } = useAuth();
   const [profile, setProfile] = useState(null);
+  // Current + carried-forward fee picture for this student. Null until loaded.
+  const [feeSummary, setFeeSummary] = useState(null);
+  const [feeLedger, setFeeLedger] = useState(null);
   // null until loaded → cards render the admin-style '—' placeholder
   const [stats, setStats] = useState(null);
   const greeting = getGreeting();
@@ -36,6 +40,16 @@ export default function StudentHome() {
 
     api.get(`/students/${id}/profile`)
       .then((r) => setProfile(r.data.data))
+      .catch(() => {});
+
+    // The full fee picture (current year + every carried-forward year). Read
+    // separately from the profile because the profile only carries the current
+    // year's cached balance — and a student who owes a previous year must see it.
+    api.get(`/students/${id}/fees`)
+      .then((r) => {
+        setFeeSummary(r.data.data?.summary ?? null);
+        setFeeLedger(r.data.data ?? null);
+      })
       .catch(() => {});
 
     /*
@@ -78,6 +92,27 @@ export default function StudentHome() {
   const initials = user?.name?.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase() || '?';
   const dash = (v) => (v === null || v === undefined ? '—' : v);
 
+  /* Total dues here include EVERY year: a carried-forward balance from a
+     previous class is still money the family owes, so the card must not show
+     only the current year's slice. `profile.feeDues` is the fallback for the
+     instant before the fee read lands, and covers a portal that cannot read
+     the fee endpoint at all. */
+  const feeValue = feeSummary
+    ? formatINR(feeSummary.totalDue)
+    : (profile ? formatINR(profile.feeDues) : '—');
+
+  /* The tooltip names the YEAR AND CLASS each amount belongs to, so a parent can
+     tell an old class's balance from this year's fee — and is pointed at the
+     profile page for the full ledger rather than being given a second one here. */
+  const feeBreakdown = feeLedger?.rows?.length
+    ? feeLedger.rows
+      .filter((r) => r.balance != null && r.balance > 0)
+      .map((r) => `${feeRowLabel(r)}: ${formatINR(r.balance)}`)
+      .join('\n')
+    : (feeSummary
+      ? `Current year: ${formatINR(feeSummary.current?.balance ?? 0)} · Previous dues: ${formatINR(feeSummary.previousDues)}`
+      : undefined);
+
   return (
     <div className="page fade-in">
 
@@ -91,7 +126,9 @@ export default function StudentHome() {
           <div className="greeting-text">{user?.name} 👋</div>
           {profile && (
             <div style={{ marginTop: 8, fontSize: 13, color: 'var(--clr-text-muted)' }}>
-              Class {profile.class} – Section {profile.section} &nbsp;|&nbsp; Roll: {profile.rollNumber}
+              {/* One shared name: "Class 10A" for a numbered level, "Nursery A" for
+                  a named one — never "Class -2 – Section A". */}
+              {profile.classLabel || '—'} &nbsp;|&nbsp; Roll: {profile.rollNumber || '—'}
             </div>
           )}
         </div>
@@ -105,9 +142,9 @@ export default function StudentHome() {
           <div className="stat-icon stat-icon-info"><CalendarCheck size={22} /></div>
           <div><div className="stat-value">{stats?.attendancePercent == null ? '—' : `${stats.attendancePercent}%`}</div><div className="stat-label">Attendance</div></div>
         </div>
-        <div className="stat-card">
+        <div className="stat-card" title={feeBreakdown}>
           <div className="stat-icon stat-icon-warning"><Banknote size={22} /></div>
-          <div><div className="stat-value">{profile ? formatINR(profile.feeDues) : '—'}</div><div className="stat-label">Fee Dues</div></div>
+          <div><div className="stat-value">{feeValue}</div><div className="stat-label">Fee Dues</div></div>
         </div>
         <div className="stat-card">
           <div className="stat-icon stat-icon-primary"><Bell size={22} /></div>

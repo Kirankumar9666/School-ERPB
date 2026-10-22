@@ -35,9 +35,26 @@ const READ_ACTIONS = new Set([
   'count', 'aggregate', 'groupBy',
 ]);
 
-const prisma = new PrismaClient({
-  log: process.env.NODE_ENV === 'production' ? ['error'] : ['error', 'warn'],
-}).$extends({
+/**
+ * The URL this process talks to.
+ *
+ * Under NODE_ENV=test the tests set TEST_DATABASE_URL, and it must win: this
+ * client is built before any test file loads its own dotenv, so honouring it
+ * here is what puts every query — the app's as much as the seed's — on the test
+ * database rather than the developer's. PrismaClient reads DATABASE_URL itself at
+ * construction and would otherwise never notice.
+ *
+ * In every other environment TEST_URL is undefined and Prisma falls back to
+ * DATABASE_URL exactly as before, so nothing outside the test run changes.
+ */
+const TEST_URL = process.env.NODE_ENV === 'test'
+  ? (process.env.TEST_DATABASE_URL || process.env.DATABASE_URL)
+  : undefined;
+
+const clientOptions = { log: process.env.NODE_ENV === 'production' ? ['error'] : ['error', 'warn'] };
+if (TEST_URL) clientOptions.datasources = { db: { url: TEST_URL } };
+
+const prisma = new PrismaClient(clientOptions).$extends({
   query: {
     $allModels: {
       $allOperations({ action, args, query }) {

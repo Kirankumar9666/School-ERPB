@@ -7,9 +7,12 @@ import AmountInput from '../../components/AmountInput';
 /**
  * Shared employee form fields used by the admin employee modal.
  *
- * Every select is fed from a single source: gender / employment type / account
- * status are the Prisma schema enums served by GET /school/options, and the job
- * role list is the shared EMPLOYEE_ROLES constant — no inline value lists.
+ * Every select is fed from a single source: gender / employment type are the
+ * Prisma schema enums served by GET /school/options, and the job role list is the
+ * shared EMPLOYEE_ROLES constant — no inline value lists. There is deliberately
+ * NO Status select: employment status is owned by End Employment / Reactivate,
+ * which are the only things that give it meaning, and the API rejects a status
+ * sent from here.
  * Mobile and Emergency Contact use the shared PhoneInput (digits-only,
  * exactly 10; the '+91-' prefix is static text added on save).
  * The Salary / Compensation section edits the employee's default monthly
@@ -22,7 +25,7 @@ import AmountInput from '../../components/AmountInput';
  */
 export default function employeeForm(form, setForm, options = {}) {
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
-  const { genders = [], employmentTypes = [], accountStatuses = [] } = options.enums || {};
+  const { genders = [], employmentTypes = [] } = options.enums || {};
   const amount = (v) => Number(v) || 0;
   const totalEarnings = SALARY_EARNINGS.reduce((n, c) => n + amount(form[c.key]), 0);
   const totalDeductions = SALARY_DEDUCTIONS.reduce((n, c) => n + amount(form[c.key]), 0);
@@ -96,7 +99,6 @@ export default function employeeForm(form, setForm, options = {}) {
           ariaLabel="Emergency contact number"
         />
       </div>
-      {o('Status', accountStatuses, 'status')}
       <div className="form-group" style={{ gridColumn: '1 / -1' }}>
         <label className="form-label">Address</label>
         <textarea className="form-input" rows={2} value={form.address} onChange={set('address')} placeholder="Residential address" />

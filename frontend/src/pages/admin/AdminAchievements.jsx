@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import { Trophy, Plus, Trash } from 'lucide-react';
 import api from '../../services/api';
 import { loadOptions, optionLabel } from '../../services/options';
-import toast from 'react-hot-toast';
+import toast from '../../services/toast';
 import ConfirmModal from '../../components/ConfirmModal';
+import LoadErrorState from '../../components/LoadErrorState';
+import { useLoadState } from '../../utils/useLoadState';
 
 /**
  * Admin Achievements — record and manage student achievements.
@@ -14,7 +16,7 @@ export default function AdminAchievements() {
   const [achievements, setAchievements] = useState([]);
   const [students, setStudents] = useState([]);
   const [types, setTypes] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { loading, setLoading, error, reloadKey, retry, fail } = useLoadState();
   const [form, setForm] = useState({ studentId: '', title: '', description: '', date: '', type: '' });
   const [saving, setSaving] = useState(false);
 
@@ -31,8 +33,8 @@ export default function AdminAchievements() {
     });
 
   useEffect(() => {
-    load().finally(() => setLoading(false));
-  }, []);
+    load().catch(fail).finally(() => setLoading(false));
+  }, [reloadKey, fail, setLoading]);
 
   const handleAdd = async (e) => {
     e.preventDefault();
@@ -81,6 +83,20 @@ export default function AdminAchievements() {
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
 
+  // A failed request is not "no achievements yet" — the two are told apart
+  // before the empty state below can ever be reached.
+  if (error) {
+    return (
+      <LoadErrorState
+        title="Achievements Management"
+        subtitle="Achievement records"
+        detail={error}
+        onRetry={retry}
+        icon={Trophy}
+      />
+    );
+  }
+
   return (
     <div className="page fade-in">
       <div className="page-header">
@@ -98,7 +114,7 @@ export default function AdminAchievements() {
                 <select className="form-input" value={form.studentId} onChange={(e) => setForm({ ...form, studentId: e.target.value })}>
                   <option value="" disabled>Select student</option>
                   {students.map((s) => (
-                    <option key={s.id} value={s.id}>{s.name} — Class {s.class}{s.section}</option>
+                    <option key={s.id} value={s.id}>{s.name} — {s.classLabel || 'no class'}</option>
                   ))}
                 </select>
               </div>

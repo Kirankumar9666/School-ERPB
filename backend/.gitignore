@@ -1,4 +1,8 @@
 node_modules/
 .env
+# The test environment file holds real connection strings for the developer's
+# local test database, so it stays untracked like .env. Copy
+# .env.test.example → .env.test and fill in your local test database.
+.env.test
 *.log
 dist/

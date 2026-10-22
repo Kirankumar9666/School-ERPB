@@ -2,6 +2,18 @@ import { useEffect, useState } from 'react';
 import { Clock } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
+import LoadErrorState from '../../components/LoadErrorState';
+import { useLoadState } from '../../utils/useLoadState';
+/**
+ * Fallback when the API has not sent a label (an older cached response):
+ * rebuild it the same way the server's shared function does.
+ */
+const displayClassName = (t) => {
+  if (t.classLabel) return t.classLabel;
+  if (t.levelName) return /^\d+$/.test(t.levelName) ? `Class ${t.levelName}${t.section}` : `${t.levelName} ${t.section}`;
+  if (t.class === null || t.class === undefined) return '—';
+  return `Class ${t.class}-${t.section}`;
+};
 
 /**
  * Student Timetable — daily/weekly teaching schedule in tabular format.
@@ -9,16 +21,29 @@ import api from '../../services/api';
 export default function StudentTimetable() {
   const { user } = useAuth();
   const [timetable, setTimetable] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { loading, setLoading, error, reloadKey, retry, fail } = useLoadState();
 
   useEffect(() => {
     if (!user?.linkedEntityId) return;
     api.get(`/students/${user.linkedEntityId}/timetable`)
       .then((r) => setTimetable(r.data.data))
+      .catch(fail)
       .finally(() => setLoading(false));
-  }, [user]);
+  }, [user, reloadKey, fail, setLoading]);
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
+
+  if (error) {
+    return (
+      <LoadErrorState
+        title="Time Table"
+        detail={error}
+        onRetry={retry}
+        icon={Clock}
+      />
+    );
+  }
+
   if (!timetable) return null;
 
   return (
@@ -26,7 +51,7 @@ export default function StudentTimetable() {
       <div className="page-header">
         <div className="page-title">Time Table</div>
         <div className="page-subtitle">
-          Class {timetable.class}-{timetable.section} · Regular schedule
+          {timetable.classLabel || displayClassName(timetable)} · Regular schedule
         </div>
       </div>
 

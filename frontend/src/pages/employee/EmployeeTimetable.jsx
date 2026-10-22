@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Clock } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
+import LoadErrorState from '../../components/LoadErrorState';
+import { useLoadState } from '../../utils/useLoadState';
 
 /**
  * Employee Timetable — teaching periods assigned to this teacher.
@@ -9,16 +11,29 @@ import api from '../../services/api';
 export default function EmployeeTimetable() {
   const { user } = useAuth();
   const [periods, setPeriods] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { loading, setLoading, error, reloadKey, retry, fail } = useLoadState();
 
   useEffect(() => {
     if (!user?.linkedEntityId) return;
     api.get(`/employees/${user.linkedEntityId}/timetable`)
       .then((r) => setPeriods(r.data.data || []))
+      .catch(fail)
       .finally(() => setLoading(false));
-  }, [user]);
+  }, [user, reloadKey, fail, setLoading]);
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
+
+  if (error) {
+    return (
+      <LoadErrorState
+        title="My Timetable"
+        subtitle="Your teaching schedule"
+        detail={error}
+        onRetry={retry}
+        icon={Clock}
+      />
+    );
+  }
 
   return (
     <div className="page fade-in">
@@ -44,7 +59,7 @@ export default function EmployeeTimetable() {
                   <td><b>{p.period}</b></td>
                   <td>{p.timeStart} – {p.timeEnd}</td>
                   <td>{p.subject}</td>
-                  <td>{p.classKey.replace('cls-', '').replace('A', ' A')}</td>
+                  <td>{p.classLabel || p.classKey}</td>
                   <td><span className="badge" style={{ background: 'var(--tint-slate)', color: 'var(--clr-accent)' }}>{p.subject.slice(0, 3).toUpperCase()}</span></td>
                   <td>{p.room}</td>
                 </tr>

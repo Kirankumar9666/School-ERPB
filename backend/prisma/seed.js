@@ -1,25 +1,51 @@
 /**
- * Prisma seed — populates the database from the same mock stores the API
- * currently serves, preserving the existing ids (usr-001, stu-001, cls-10A,
- * exam-001, ...) so API URLs stay stable after the mock -> Prisma swap.
+ * FIXTURE seed — wipes the database and rebuilds it from the mock stores
+ * (usr-001, stu-001, cls-10A, exam-001, ...), preserving the existing ids so
+ * API URLs stay stable after the mock -> Prisma swap.
  *
- * Run as a CLI:  npx prisma db seed   (requires DATABASE_URL + migrated db:
- *                                     npx prisma migrate dev / deploy)
+ * THIS IS THE DESTRUCTIVE SEED. It deletes every table, so it may only ever run
+ * against the TEST database — the guard at the top of `seed()` enforces that,
+ * and running it by hand against anything else stops with a message and deletes
+ * nothing.
  *
- * Also importable:  const { seed } = require('../prisma/seed')  — the test
- * helper calls this before each test file so every file starts from the same
- * seeded state (the mock stores used to give each test process fresh data).
+ *   Tests             `npm test` (tests/helpers.js calls this before each file)
+ *   Directly, guarded  node prisma/seed.js   with TEST_DATABASE_URL set
  *
- * Idempotent: wipes all tables in reverse-dependency order, then inserts.
+ * For a database that must keep its data — a demo, a staging box, a developer's
+ * own working copy — use prisma/demo-seed.js, which upserts and never deletes.
+ *
+ * @see ./demo-seed.js the non-destructive seed
  */
 const { PrismaClient } = require('@prisma/client');
 const PDFDocument = require('pdfkit');
+const { assertSafeToWipe } = require('../src/config/test-env');
 const { MOCK_USERS } = require('../src/mock/users');
 const { MOCK_STUDENTS, MOCK_ATTENDANCE_STUDENT, MOCK_MARKS, MOCK_ACHIEVEMENTS, MOCK_STUDENT_DOCUMENTS } = require('../src/mock/students');
 const { MOCK_EMPLOYEES, MOCK_ATTENDANCE_EMPLOYEE, MOCK_LEAVES, MOCK_PAYROLL, MOCK_DOCUMENTS } = require('../src/mock/employees');
 const { MOCK_TIMETABLE, MOCK_HOLIDAYS, MOCK_ANNOUNCEMENTS, MOCK_SYLLABUS } = require('../src/mock/school');
 
-const prisma = new PrismaClient();
+/*
+ * The URL this seed is about to wipe, and the reason it is read BEFORE the client
+ * is built.
+ *
+ * PrismaClient reads DATABASE_URL itself at construction, so the tests pass
+ * TEST_DATABASE_URL through the environment and this seed must honour it — a test
+ * that inherited the developer’s DATABASE_URL would wipe their database instead.
+ * `assertSafeToWipe` then judges it, and only a database whose name carries the
+ * "test" marker is allowed. Reads `process.env` directly rather than through
+ * src/config/env.js so the guard is the first thing that runs, before any
+ * configuration module has pulled in the rest of the app.
+ */
+const SEED_DATABASE_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
+assertSafeToWipe(SEED_DATABASE_URL, 'prisma/seed.js (the fixture seed deletes every table)');
+
+const prisma = new PrismaClient({
+  datasources: {
+    db: {
+      url: SEED_DATABASE_URL,
+    },
+  },
+});
 const at = (dateStr) => new Date(`${dateStr}T00:00:00.000Z`);
 
 /** 'cls-10A' -> { grade: 10, section: 'A' } (inverse of the mock key format) */
@@ -42,13 +68,56 @@ function collectClasses() {
   return byId;
 }
 
+/** '2026-27' from a start year — the AcademicYear id is always 'ay-' + this. */
+const academicYearLabel = (startYear) => `${startYear}-${String((startYear + 1) % 100).padStart(2, '0')}`;
+
+/**
+ * The academic years the seed creates: a window of June-to-May years around the
+ * REAL current date, so the Class Management year dropdowns have real years to
+ * choose from and somewhere real to promote into.
+ *
+ * Derived from the clock like everything else here — not one year is written out.
+ * The window is deliberately generous, because a year that does not exist yet is a
+ * promotion that cannot be performed, and adding a year later is trivial whereas a
+ * promotion blocked by a missing one is not.
+ */
+function collectAcademicYears() {
+  const now = new Date();
+  // An academic year starts on 1 June, so anything from June onwards belongs to
+  // the year beginning this calendar year. UTC throughout, matching `at()` and
+  // every other date this seed builds.
+  const currentStartYear = now.getUTCMonth() >= 5 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;
+  const years = [];
+  for (let y = currentStartYear - 6; y <= currentStartYear + 6; y += 1) {
+    const label = academicYearLabel(y);
+    years.push({
+      id: `ay-${label}`,
+      label,
+      startDate: new Date(Date.UTC(y, 5, 1)),
+      endDate: new Date(Date.UTC(y + 1, 4, 31)),
+      isCurrent: y === currentStartYear,
+    });
+  }
+  return years;
+}
+
+/**
+ * The academic year containing a date, matched by RANGE — the same rule
+ * services/enrollment.js applies on read, so a seeded exam can never land in a
+ * different year than the app would have put it in.
+ */
+function academicYearFor(years, date) {
+  const t = date.getTime();
+  return years.find((y) => t >= y.startDate.getTime() && t <= y.endDate.getTime()) || null;
+}
+
 /**
  * A small one-page demo PDF for the seeded document records, so the document
  * download endpoints serve a real file from the very first seed (a real
  * upload replaces it). Standard-font ASCII only — the ₹-capable DejaVu fonts
  * the payslip embeds are not needed here.
  */
-function demoDocumentPdf({ type, fileName, owner }) {
+function demoDocumentPdf({ type, fileName, owner, subtitle }) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margins: { top: 64, bottom: 64, left: 64, right: 64 } });
     const chunks = [];
@@ -57,7 +126,8 @@ function demoDocumentPdf({ type, fileName, owner }) {
     doc.on('error', reject);
     doc.font('Helvetica-Bold').fontSize(18).fillColor('#6d1a2d').text('School ERP');
     doc.moveDown(0.3);
-    doc.font('Helvetica').fontSize(11).fillColor('#555555').text('Demo document record (seed data)');
+    doc.font('Helvetica').fontSize(11).fillColor('#555555')
+      .text(subtitle || 'Demo document record (seed data)');
     doc.moveDown(1);
     doc.font('Helvetica-Bold').fontSize(14).fillColor('#111111').text(type);
     doc.moveDown(0.5);
@@ -94,21 +164,54 @@ async function withRetry(fn, attempts = 4, baseDelayMs = 1500) {
   throw lastErr;
 }
 
-async function seed() {
+const { wipeAll } = require('./fixture-seed.wipe');
+
+/**
+ * Build the fixture database.
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.wipe=true] delete every table first. `false` is the
+ *   demo path — the fixtures are inserted over whatever is there, which works
+ *   because every id below is deterministic and `createMany` is swapped for
+ *   upserts in that mode.
+ */
+async function seed(opts = {}) {
+  const wipe = opts.wipe !== false;
   return withRetry(async () => {
-  /* ---- wipe in reverse-dependency order (idempotent re-seed) ---- */
-  for (const model of [
-    'auditEntry', 'marksEntry', 'exam', 'studentAttendance', 'employeeAttendance',
-    'teachingAssignment', 'leaveRequest', 'leaveBalance', 'payrollRecord',
-    'employeeDocument', 'studentDocument', 'achievement', 'syllabusEntry', 'timetablePeriod',
-    'reminder', 'announcement', 'holiday', 'student', 'class', 'employee', 'user',
-  ]) {
-    await prisma[model].deleteMany();
-  }
+    if (wipe) await wipeAll(prisma);
+
+    /* ---- academic years (the spine every class/enrollment/exam hangs off) ---- */
+  const years = collectAcademicYears();
+  const currentYear = years.find((y) => y.isCurrent);
+  if (!currentYear) throw new Error('[seed] no academic year contains today — the June-to-May window is empty');
+  await prisma.academicYear.createMany({ data: years });
+
+  /* ---- grade levels (the school's level list, as DATA) ----
+     These mirror the migration's rows exactly, so a seeded database and a
+     migrated one can never disagree about what levels exist or what order they
+     sit in. skipDuplicates because the MIGRATION already inserts these rows, so
+     a migrated database has them before the seed runs and a re-run must not fail. */
+  const SEED_LEVELS = [['Nursery', -2], ['LKG', -1], ['UKG', 0]]
+    .concat(Array.from({ length: 10 }, (_, i) => [String(i + 1), i + 1]));
 
   /* ---- classes (derived from every reference in the mock data) ---- */
+  await prisma.gradeLevel.createMany({
+    data: SEED_LEVELS.map(([name, order]) => ({ id: `gl-${name.toUpperCase()}`, name, order })),
+    skipDuplicates: true,
+  });
+
+  const levelsByOrder = new Map((await prisma.gradeLevel.findMany()).map((l) => [String(l.order), l]));
+
   const classes = collectClasses();
-  await prisma.class.createMany({ data: [...classes.values()] });
+  await prisma.class.createMany({
+    data: [...classes.values()].map((c) => {
+      // Link each seeded class to the level holding its grade, so `classLabel`
+      // resolves through the shared name function.
+      const level = levelsByOrder.get(String(c.grade));
+      if (!level) throw new Error(`[seed] no grade level for class ${c.id}`);
+      return { ...c, levelId: level.id };
+    }),
+  });
 
   /* ---- users ---- */
   await prisma.user.createMany({
@@ -165,23 +268,89 @@ async function seed() {
     });
   }
 
-  /* ---- attendance ---- */
+  /* ---- current-year class enrollments ----
+         ONE row per student, for the academic year containing today, saying the
+         only thing the fixtures actually know: these children are in these classes
+         right now.
+
+         Their earlier years are deliberately NOT invented. The mocks record an
+         admission year but not which classes they passed through, so a guessed
+         history would put fabricated rows in front of the school — and every one of
+         those years would then show up in Class History looking authoritative.
+         Those years stay empty until the office promotes into them or backfills
+         the real records through "Enter Past Data", which is what that feature is
+         for. */
+  for (const s of MOCK_STUDENTS) {
+    const classId = `cls-${s.class}${String(s.section).toUpperCase()}`;
+    await prisma.studentEnrollment.create({
+      data: {
+        // Deterministic, so re-seeding cannot leave a duplicate behind.
+        id: `enr-${s.id}`,
+        studentId: s.id,
+        academicYearId: currentYear.id,
+        classId,
+        rollNumber: s.rollNumber ?? null,
+        status: 'active',
+        source: 'live',
+        enrolledOn: s.admissionYear ? new Date(Date.UTC(s.admissionYear, 5, 1)) : new Date(),
+      },
+    });
+  }
+
+  /* ---- current-year fees (one row per student — the new source of truth) ----
+         The fixture's legacy `feeTotal`/`feeDues` scalars become a per-year
+         `StudentFee` row, and the already-paid part becomes one payment — the
+         exact shape the migration produces for rows that already exist. A
+         student with no fee data gets `total: null` ("Not set"), which is what
+         the Fee Dues "fee not set" filter is for. `Student.feeTotal`/`feeDues`
+         are left as the fixture set them; they are the derived cache the app
+         still reads. */
+  for (const s of MOCK_STUDENTS) {
+    const classId = `cls-${s.class}${String(s.section).toUpperCase()}`;
+    const total = s.feeTotal ?? s.feeDues ?? null;
+    await prisma.studentFee.create({
+      data: { id: `sf-${s.id}`, studentId: s.id, academicYearId: currentYear.id, classId, total },
+    });
+    if (s.feeTotal != null && s.feeDues != null && s.feeTotal - s.feeDues > 0) {
+      await prisma.feePayment.create({
+        data: {
+          id: `fp-${s.id}`,
+          studentFeeId: `sf-${s.id}`,
+          amount: s.feeTotal - s.feeDues,
+          paidOn: s.admissionYear ? new Date(Date.UTC(s.admissionYear, 5, 1)) : new Date(),
+          note: 'Opening balance from the student record',
+        },
+      });
+    }
+  }
+
+  /* ---- attendance (one FN row + one AN row per mock day; the mock files are
+     day-level, and each recorded day applies to both sessions — so FN and AN
+     always agree in the seed data, exactly like the migration's backfill) ---- */
   const studentAttendance = [];
   Object.entries(MOCK_ATTENDANCE_STUDENT).forEach(([studentId, months]) => {
     Object.values(months).forEach((days) => {
       Object.entries(days).forEach(([date, status]) => {
-        studentAttendance.push({ studentId, date: at(date), status });
+        ['FN', 'AN'].forEach((session) => {
+          studentAttendance.push({ studentId, date: at(date), session, status });
+        });
       });
     });
   });
   if (studentAttendance.length) await prisma.studentAttendance.createMany({ data: studentAttendance });
 
+  // Employee session hours keep the day total: a present day was 8h, so each
+  // present session is 4h (a late day 7h → 3.5h per half, etc.). The read side
+  // sums the two halves back into the day figures the mocks always asserted.
   const employeeAttendance = [];
   Object.entries(MOCK_ATTENDANCE_EMPLOYEE).forEach(([employeeId, months]) => {
     Object.values(months).forEach((days) => {
       Object.entries(days).forEach(([date, rec]) => {
-        employeeAttendance.push({
-          employeeId, date: at(date), status: rec.status, workingHours: rec.workingHours ?? null,
+        const halfHours = (rec.workingHours ?? 0) / 2;
+        ['FN', 'AN'].forEach((session) => {
+          employeeAttendance.push({
+            employeeId, date: at(date), session, status: rec.status, workingHours: halfHours,
+          });
         });
       });
     });
@@ -189,14 +358,18 @@ async function seed() {
   if (employeeAttendance.length) await prisma.employeeAttendance.createMany({ data: employeeAttendance });
 
   /* ---- exams + marks (exams derived from the marks rows themselves) ---- */
-  const exams = new Map(); // examId -> { id, classId, name, date }
+  const exams = new Map(); // examId -> { id, classId, name, date, academicYearId }
   Object.entries(MOCK_MARKS).forEach(([studentId, examList]) => {
     const student = MOCK_STUDENTS.find((s) => s.id === studentId);
     const classId = `cls-${student.class}${String(student.section).toUpperCase()}`;
     examList.forEach((exam) => {
-      if (!exams.has(exam.examId)) {
-        exams.set(exam.examId, { id: exam.examId, classId, name: exam.examName, date: at(exam.date) });
-      }
+      if (exams.has(exam.examId)) return;
+      const date = at(exam.date);
+      // Resolved by RANGE from the same table the app reads, never written out:
+      // an exam dated inside one year must not be filed under another.
+      const year = academicYearFor(years, date);
+      if (!year) throw new Error(`[seed] exam ${exam.examId} dated ${exam.date} falls outside every academic year`);
+      exams.set(exam.examId, { id: exam.examId, classId, name: exam.examName, date, academicYearId: year.id, source: 'live' });
     });
   });
   if (exams.size) await prisma.exam.createMany({ data: [...exams.values()] });
@@ -252,6 +425,10 @@ async function seed() {
   const payroll = [];
   Object.entries(MOCK_PAYROLL).forEach(([employeeId, list]) => {
     list.forEach((p) => payroll.push({
+      // Seeded as 'pr-EMP-2020-001-2026-08' so the payment rows below can be
+      // linked without a second lookup. Deterministic, and unique per
+      // (employee, month) — the same pair the unique index enforces.
+      id: `pr-${employeeId}-${p.month}`,
       employeeId, month: p.month, basicPay: p.basicPay,
       hra: p.allowances?.hra ?? 0,
       transportAllowance: p.allowances?.transportAllowance ?? 0,
@@ -264,6 +441,22 @@ async function seed() {
     }));
   });
   if (payroll.length) await prisma.payrollRecord.createMany({ data: payroll });
+
+  /* Months the mock marks as paid get ONE real payment row for the full net, on
+     the date it was recorded. This is the same shape the migration's backfill
+     produces for existing databases, so a freshly seeded DB and a migrated one
+     are indistinguishable to every query that follows — in particular, the
+     derived "settled on" date and the paid/partial status. */
+  const payrollPayments = payroll
+    .filter((p) => p.paidOn)
+    .map((p) => ({
+      id: `pay-${p.id}`,
+      payrollRecordId: p.id,
+      amount: p.netSalary,
+      paidOn: p.paidOn,
+      note: null,
+    }));
+  if (payrollPayments.length) await prisma.payrollPayment.createMany({ data: payrollPayments });
 
   /* Document records carry their (validated) PDF bytes in `data`, so the
    * download endpoints serve a real file. The seed generates a small demo
@@ -296,19 +489,35 @@ async function seed() {
 
   /* ---- announcements / holidays / achievements ---- */
   if (MOCK_ANNOUNCEMENTS.length) {
-    await prisma.announcement.createMany({
-      data: MOCK_ANNOUNCEMENTS.map((a) => ({
+    // Attachments are real generated PDFs (not placeholders) so the
+    // download endpoints serve an actual file from the first seed — the same
+    // way the seeded document records work. A mock without `pdfFileName` stays
+    // a text-only circular.
+    const announcements = [];
+    for (const a of MOCK_ANNOUNCEMENTS) {
+      announcements.push({
         id: a.id, title: a.title, body: a.body, targetRoles: a.targetRoles,
         category: a.category ?? null, createdAt: new Date(a.createdAt),
         showFrom: at(a.showFrom), showUntil: at(a.showUntil),
-      })),
-    });
+        targetScope: a.targetScope ?? 'ROLES',
+        targetClassId: a.targetClassId ?? null,
+        createdById: a.createdById ?? null,
+        attributedTo: a.attributedTo ?? null,
+        pdfFileName: a.pdfFileName ?? null,
+        pdfData: a.pdfFileName ? await demoDocumentPdf({ type: a.title, fileName: a.pdfFileName, owner: a.attributedTo || 'School Office', subtitle: 'Announcement attachment (seed data)' }) : null,
+      });
+    }
+    await prisma.announcement.createMany({ data: announcements });
   }
   if (MOCK_HOLIDAYS.length) {
     await prisma.holiday.createMany({
       data: MOCK_HOLIDAYS.map((h) => ({ id: h.id, date: at(h.date), name: h.name })),
     });
   }
+
+  /* ---- school settings (weekly off days — Sunday only by default) ---- */
+  await prisma.setting.create({ data: { key: 'weeklyOffDays', value: [0] } });
+
   const achievements = [];
   Object.entries(MOCK_ACHIEVEMENTS).forEach(([studentId, list]) => {
     list.forEach((a) => achievements.push({
@@ -328,9 +537,18 @@ async function seed() {
 
 module.exports = { seed, prisma };
 
-/* CLI entry (npx prisma db seed / node prisma/seed.js) */
+/* CLI entry. `npx prisma db seed` is wired to demo-seed.js, which never
+   deletes; this one is only for the test database and prints the guard's
+   refusal rather than a stack trace. */
 if (require.main === module) {
   seed()
-    .catch((err) => { console.error(err); process.exit(1); })
+    .catch((err) => {
+      if (err && err.code === 'UNSAFE_DATABASE') {
+        console.error(err.message);
+        process.exit(2);
+      }
+      console.error(err);
+      process.exit(1);
+    })
     .finally(() => prisma.$disconnect());
 }

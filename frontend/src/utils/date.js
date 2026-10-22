@@ -57,3 +57,38 @@ export const buildCalendar = (year, month) => {
 /** Two-letter uppercase initials from a name */
 export const initials = (name) =>
   (name || '?').split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase();
+
+/**
+ * A calendar date for a value that may be either a 'YYYY-MM-DD' string or a full
+ * ISO timestamp — '12 Mar 2026', or the input unchanged if it is unparseable.
+ *
+ * The two need different handling on purpose. `new Date('2026-03-12')` is UTC
+ * midnight, which renders as 11 March for any reader west of Greenwich — so a
+ * bare calendar date is built as LOCAL midnight instead. A real timestamp is left
+ * alone and shown in the reader's own zone, which is what an "applied at" moment
+ * should do.
+ */
+export const shortDate = (value) => {
+  if (!value) return '—';
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? new Date(`${value}T00:00:00`)
+    : new Date(value);
+  return Number.isNaN(d.getTime())
+    ? value
+    : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+};
+
+/**
+ * Short timestamp for an ISO string — '28 Sep 2026, 14:32', or null for null.
+ *
+ * Used where a mark's record has to be attributable ("who saved this, and
+ * when"), so the raw ISO string is never shown raw. Rendered in the reader's
+ * own locale rather than a hardcoded zone, matching the rest of the app.
+ */
+export const shortStamp = (iso) => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getDate()} ${MONTH_NAMES[d.getMonth()].slice(0, 3)} ${d.getFullYear()}, `
+    + `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+};

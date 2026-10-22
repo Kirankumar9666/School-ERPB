@@ -1,0 +1,20 @@
+-- Index the (exam, subject) lookup that both marks readers now issue.
+--
+-- The schema declared `@@index([examId, subject])` for MarksEntry, but the
+-- marks_attribution migration only added the four attribution columns and never
+-- created it, so the schema and the database had drifted apart. This migration
+-- closes that gap.
+--
+-- What it is for, concretely: both the teacher Marks Entry page
+-- (`GET /employees/:id/marks`, which loads one subject's rows for one exam to
+-- pre-fill the grid) and the shared `groupMarksByExam` read filter on
+-- `(subject, exam.classId)`. The pre-existing `MarksEntry_examId_idx` only
+-- narrows to the exam, leaving the subject comparison as a scan of that exam's
+-- rows — the exam's row count, not the table's, but still a scan on a path that
+-- runs on every roster load.
+--
+-- Purely additive: CREATE INDEX takes a plain (non-concurrent) lock at creation,
+-- so on a busy deployment run this as `CREATE INDEX CONCURRENTLY` outside a
+-- transaction instead. MarksEntry holds at most (students × exams × subjects)
+-- rows — hundreds for a school, not millions — so the build is brief.
+CREATE INDEX "MarksEntry_examId_subject_idx" ON "MarksEntry"("examId", "subject");

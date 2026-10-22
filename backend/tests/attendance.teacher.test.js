@@ -4,9 +4,15 @@
  *
  * Proves the teacher "Mark Attendance" flow added to the employee portal really
  * is the admin panel's flow: same tables, same 1-hour edit window, same atomic
- * bulk save — plus the scoping that makes it safe, which is enforced server-side
- * (a class the teacher isn't assigned to is rejected even when requested
- * directly, not merely hidden in the UI).
+ * bulk save — plus the scoping that makes it safe.
+ *
+ * THE SCOPE IS THE TIMETABLE, shared with Marks Entry and My Timetable
+ * (`services/timetableScope.js`): a teacher may mark attendance only for classes
+ * where she has a `TimetablePeriod` carrying her name. A `TeachingAssignment`
+ * row no longer grants attendance access, and a class with an assignment but no
+ * period is refused — the drift this rule exists to close. The refusal is
+ * enforced server-side and answered as 404 (out-of-scope ids are indistinguishable
+ * from missing ones), not merely hidden in the UI.
  *
  * Node built-in test runner, zero deps. The class and student the teacher must
  * NOT touch are created here rather than assumed from the seed, so the test
@@ -48,21 +54,38 @@ test('teacher class attendance: own classes only, shared records with admin', as
   assert.ok(ownClasses.length > 0, 'seeded teacher teaches at least one class');
   const ownClassId = ownClasses[0].id;
 
-  await t.test("classes: derived from the teacher's live assignments, never hardcoded", async () => {
+  await t.test('classes: derived from the teacher\'s TIMETABLE periods, never a stored list', async () => {
     const res = await teacherClasses();
     assert.equal(res.status, 200);
     const list = res.body.data;
-    assert.ok(list.length > 0, 'seeded teacher teaches at least one class');
+    assert.ok(list.length > 0, 'seeded teacher has at least one period');
 
-    // Cross-check against the profile's own assignedClasses (independent read).
-    const profile = (await request(base, '/employees/emp-001/profile', { token: teacher.accessToken })).body.data;
+    // Cross-check against the timetable itself (independent read of the source).
+    const periods = await prisma.timetablePeriod.findMany({
+      where: { teacherName: (await prisma.employee.findUnique({ where: { id: 'emp-001' } })).name },
+      select: { classId: true },
+    });
+    const expected = [...new Set(periods.map((p) => p.classId))].sort();
     assert.deepEqual(
       list.map((c) => c.id).sort(),
-      profile.assignedClasses.map((c) => c.classId).sort(),
-      'the markable list is exactly this teacher\'s assignments',
+      expected,
+      'the markable list is exactly the classes this teacher has a period in',
     );
 
-    // No assignment → not listed, even though the class now exists.
+    /* The seed gives this teacher a TeachingAssignment for a class with NO
+       period (cls-9B). The list must NOT include it — that is the exact drift
+       this rule exists to close. */
+    const assignedWithoutPeriod = await prisma.teachingAssignment.findFirst({
+      where: { employeeId: 'emp-001', classId: { notIn: expected } },
+      select: { classId: true },
+    });
+    assert.ok(assignedWithoutPeriod, 'the seed has an assignment for a class with no period');
+    assert.ok(
+      !list.some((c) => c.id === assignedWithoutPeriod.classId),
+      'an assignment with no timetable period is NOT markable',
+    );
+
+    // No period → not listed, even though the class now exists.
     assert.ok(!list.some((c) => c.id === foreignClassId), 'a class the teacher does not teach is absent');
 
     // Headcounts and labels are live, and match the real rosters.
@@ -71,8 +94,61 @@ test('teacher class attendance: own classes only, shared records with admin', as
     assert.deepEqual(list.map((c) => c.studentCount), liveCounts, 'headcounts match the live rosters');
   });
 
+  await t.test('a teacher with TWO timetable classes sees exactly those two', async () => {
+    /* Give this teacher a period in a second class, through the admin API (no
+       hardcoded ids, no direct row writes). The list must grow to include it,
+       and only it. */
+    const secondClassId = 'cls-9B';
+    await prisma.class.upsert({
+      where: { id: secondClassId }, update: {}, create: { id: secondClassId, grade: 9, section: 'B' },
+    });
+    const add = await request(base, '/admin/timetable', {
+      method: 'POST',
+      token: admin.accessToken,
+      body: { classKey: secondClassId, period: 1, timeStart: '08:00', timeEnd: '08:45', subject: 'Mathematics', teacher: 'Priya Sharma', room: '201' },
+    });
+    assert.equal(add.status, 201);
+
+    const list = (await teacherClasses()).body.data;
+    assert.deepEqual(
+      list.map((c) => c.id).sort(),
+      [ownClassId, secondClassId].sort(),
+      'exactly the two classes in the timetable are listed',
+    );
+
+    // Removing the period revokes the class on the next request — the list is
+    // genuinely derived, not snapshotted.
+    await request(base, `/admin/timetable/${secondClassId}/1`, { method: 'DELETE', token: admin.accessToken });
+    const after = (await teacherClasses()).body.data;
+    assert.deepEqual(after.map((c) => c.id), [ownClassId], 'the class is gone once its period is');
+  });
+
+  await t.test('a teacher WITH a period in a class CAN mark attendance for it', async () => {
+    /* The positive side of the rule: the permitted class is not merely listed,
+       it actually accepts a save and a read. */
+    const group = await getGroup({ groupKey: ownClassId, date: today, session: 'FN' });
+    assert.equal(group.status, 200, 'the period-bearing class is readable');
+
+    const roster = await request(base, `/employees/emp-001/attendance/students?groupKey=${ownClassId}`, { token: teacher.accessToken });
+    assert.equal(roster.status, 200, 'and its roster is readable');
+
+    const members = (await prisma.student.findMany({ where: { classId: ownClassId }, select: { id: true } })).map((s) => s.id);
+    assert.ok(members.length > 0, 'the permitted class has a roster');
+
+    const saved = await request(base, '/employees/emp-001/attendance/bulk', {
+      method: 'POST',
+      token: teacher.accessToken,
+      body: {
+        kind: 'student', groupKey: ownClassId, date: today, session: 'AN',
+        entries: members.map((id, i) => ({ entityId: id, status: i % 2 ? 'absent' : 'present' })),
+      },
+    });
+    assert.equal(saved.status, 201, 'the save is accepted for a class the teacher has a period in');
+    assert.equal(saved.body.data.saved, members.length);
+  });
+
   await t.test('group read: own class roster matches the live students, admin-identical shape', async () => {
-    const res = await getGroup({ groupKey: ownClassId, date: today });
+    const res = await getGroup({ groupKey: ownClassId, date: today, session: 'FN' });
     assert.equal(res.status, 200);
     const g = res.body.data;
     assert.equal(g.groupKey, ownClassId);
@@ -86,35 +162,71 @@ test('teacher class attendance: own classes only, shared records with admin', as
     // Identical payload to the admin endpoint for the same group + date.
     const adminGroup = (await request(
       base,
-      `/admin/attendance/group?${new URLSearchParams({ kind: 'student', groupKey: ownClassId, date: today })}`,
+      `/admin/attendance/group?${new URLSearchParams({ kind: 'student', groupKey: ownClassId, date: today, session: 'FN' })}`,
       { token: admin.accessToken },
     )).body.data;
     assert.equal(g.label, adminGroup.label, 'same derived label');
     assert.deepEqual(g.members.map((m) => m.id), adminGroup.members.map((m) => m.id));
   });
 
-  await t.test('a class the teacher is not assigned to → 403 on every entry point', async () => {
-    const group = await getGroup({ groupKey: foreignClassId, date: today });
-    assert.equal(group.status, 403);
-    assert.equal(group.body.code, 'FORBIDDEN');
+  await t.test('a class the teacher has no period in → 404 on every entry point', async () => {
+    /* Out of scope is answered as "not found", so the endpoint cannot be used
+       to probe which class ids exist. The class really exists (created above) —
+       the caller simply may not see it. */
+    const group = await getGroup({ groupKey: foreignClassId, date: today, session: 'FN' });
+    assert.equal(group.status, 404);
+    assert.equal(group.body.code, 'NOT_FOUND');
 
     const roster = await request(base, `/employees/emp-001/attendance/students?groupKey=${foreignClassId}`, { token: teacher.accessToken });
-    assert.equal(roster.status, 403);
+    assert.equal(roster.status, 404);
 
     const save = await request(base, '/employees/emp-001/attendance/bulk', {
       method: 'POST',
       token: teacher.accessToken,
       body: {
-        kind: 'student', groupKey: foreignClassId, date: today,
+        kind: 'student', groupKey: foreignClassId, date: today, session: 'FN',
         entries: [{ entityId: foreignStudentId, status: 'present' }],
       },
     });
-    assert.equal(save.status, 403);
-    assert.equal(save.body.code, 'FORBIDDEN');
+    assert.equal(save.status, 404);
+    assert.equal(save.body.code, 'NOT_FOUND');
 
     // …and nothing was written for that student.
     const rows = await prisma.studentAttendance.count({ where: { studentId: foreignStudentId } });
     assert.equal(rows, 0, 'rejected request left no attendance rows behind');
+  });
+
+  await t.test('an ASSIGNED class with no timetable period is refused too (assignments no longer grant access)', async () => {
+    /* The whole point of the change: the seed gives this teacher a
+       TeachingAssignment for cls-9B but no period in it. Under the old rule
+       that class was markable; under the timetable rule it must be refused on
+       every entry point. */
+    const noPeriod = await prisma.teachingAssignment.findFirst({
+      where: { employeeId: 'emp-001', classId: { not: ownClassId } },
+      select: { classId: true },
+    });
+    assert.ok(noPeriod, 'the seed has an assignment for a class with no period');
+    const classId = noPeriod.classId;
+    const member = await prisma.student.findFirst({ where: { classId }, select: { id: true } });
+
+    const group = await getGroup({ groupKey: classId, date: today, session: 'FN' });
+    assert.equal(group.status, 404, 'a class with an assignment but no period is out of scope');
+
+    // The class-list endpoint never offers it either.
+    assert.ok(!(await teacherClasses()).body.data.some((c) => c.id === classId));
+
+    if (member) {
+      const save = await request(base, '/employees/emp-001/attendance/bulk', {
+        method: 'POST',
+        token: teacher.accessToken,
+        body: {
+          kind: 'student', groupKey: classId, date: today, session: 'FN',
+          entries: [{ entityId: member.id, status: 'present' }],
+        },
+      });
+      assert.equal(save.status, 404, 'the save is refused as well, not merely hidden');
+      assert.equal(await prisma.studentAttendance.count({ where: { studentId: member.id } }), 0);
+    }
   });
   await t.test('own class roster via the students endpoint — same rows the admin screens use', async () => {
     const res = await request(base, `/employees/emp-001/attendance/students?groupKey=${ownClassId}`, { token: teacher.accessToken });
@@ -140,13 +252,13 @@ test('teacher class attendance: own classes only, shared records with admin', as
   });
 
   await t.test('teacher save is the admin panel record — identical rows on both sides', async () => {
-    const roster = (await getGroup({ groupKey: ownClassId, date: today })).body.data;
+    const roster = (await getGroup({ groupKey: ownClassId, date: today, session: 'FN' })).body.data;
     const entries = roster.members.map((m, i) => ({ entityId: m.id, status: i === 0 ? 'absent' : 'present' }));
 
     const saved = await request(base, '/employees/emp-001/attendance/bulk', {
       method: 'POST',
       token: teacher.accessToken,
-      body: { kind: 'student', groupKey: ownClassId, date: today, entries },
+      body: { kind: 'student', groupKey: ownClassId, date: today, session: 'FN', entries },
     });
     assert.equal(saved.status, 201);
     assert.equal(saved.body.data.saved, entries.length);
@@ -155,7 +267,7 @@ test('teacher class attendance: own classes only, shared records with admin', as
     // The admin panel's own endpoint for the same group + date reads it back.
     const adminView = (await request(
       base,
-      `/admin/attendance/group?${new URLSearchParams({ kind: 'student', groupKey: ownClassId, date: today })}`,
+      `/admin/attendance/group?${new URLSearchParams({ kind: 'student', groupKey: ownClassId, date: today, session: 'FN' })}`,
       { token: admin.accessToken },
     )).body.data;
     assert.equal(adminView.members[0].status, 'absent');

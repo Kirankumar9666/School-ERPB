@@ -1,0 +1,28 @@
+-- Marks gain the teacher's own 2-day edit clock: teacherSavedAt, the last time
+-- a TEACHER wrote a mark row (Employee Portal Marks Entry, or its bulk upload).
+-- services/marks.js enforces the window on the write and reports it on the read,
+-- so a teacher can correct a batch for 48 hours after saving it and only the
+-- Admin Panel can change it after that.
+--
+-- Why a fourth timestamp and not `updatedAt`:
+--
+--   updatedAt is "when this row was last written by ANYONE". The admin panel
+--   writes the same rows, so anchoring the teacher's window to updatedAt would
+--   make an admin correction REOPEN the teacher's 48 hours — the exact opposite
+--   of the rule, and a way for an admin's fix to be silently undone by whoever
+--   typed the original mark. A separate column means an admin write leaves the
+--   teacher's clock alone: the window stays shut, and the admin's edit is the
+--   last word.
+--
+--   It is per ROW, but the window is per BATCH: the enforcement reads MAX
+--   teacherSavedAt across the (exam, subject) group, so a whole class's marks
+--   lock and unlock together even when a save covered only some of the students.
+--
+-- Optional with no default, so this is purely additive: every existing mark
+-- keeps working and simply has no teacher save time recorded (no window to
+-- enforce). Like the attribution columns it deliberately does NOT get
+-- @default(now()) — that would stamp every pre-existing row with the migration's
+-- run time and invent a history that never happened.
+
+-- AlterTable
+ALTER TABLE "MarksEntry" ADD COLUMN "teacherSavedAt" TIMESTAMP(3);

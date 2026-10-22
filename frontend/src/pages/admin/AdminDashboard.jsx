@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Users, User, Banknote, Bell, PartyPopper, Umbrella, ArrowRight, CalendarDays, ClipboardList, Clock } from 'lucide-react';
+import {
+  Users, User, Banknote, Bell, PartyPopper, Umbrella, ArrowRight, CalendarDays,
+  ClipboardList, Clock, LayoutDashboard,
+} from 'lucide-react';
 import api from '../../services/api';
+import LoadErrorState from '../../components/LoadErrorState';
+import { useLoadState } from '../../utils/useLoadState';
 
 const formatINR = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
 
@@ -10,14 +15,33 @@ const formatINR = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
  */
 export default function AdminDashboard() {
   const [summary, setSummary] = useState(null);
+  const { loading, setLoading, error, reloadKey, retry, fail } = useLoadState();
 
+  /* The summary is every number this page renders. A rejected request must not
+     leave ₹0 fee dues and "0 pending" standing in for values the server never
+     delivered — `.catch(fail)` records it so the render can say so. */
   useEffect(() => {
     api.get('/admin/reports/summary')
       .then((r) => setSummary(r.data.data))
-      .catch(() => {});
-  }, []);
+      .catch(fail)
+      .finally(() => setLoading(false));
+  }, [reloadKey, fail, setLoading]);
 
   const dateStr = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+
+  if (loading) return <div className="loading-center"><div className="spinner" /></div>;
+
+  if (error) {
+    return (
+      <LoadErrorState
+        title="Admin Dashboard"
+        subtitle={`${dateStr} · Manage the entire school`}
+        detail={error}
+        onRetry={retry}
+        icon={LayoutDashboard}
+      />
+    );
+  }
 
   return (
     <div className="page fade-in">
@@ -26,28 +50,26 @@ export default function AdminDashboard() {
         <div className="page-subtitle">{dateStr} · Manage the entire school</div>
       </div>
 
-      {/* Summary stats */}
+      {/* Summary stats — each card navigates to the view behind its number.
+          The values stay exactly what `/admin/reports/summary` computed from the
+          database; only the destination is new. Built from an array the same way
+          Quick Management is below, so the two rows cannot drift apart. */}
       <div className="stat-grid" style={{ marginBottom: 'var(--sp-xl)' }}>
-        <div className="stat-card">
-          <div className="stat-icon stat-icon-primary"><Users size={22} /></div>
-          <div><div className="stat-value">{summary?.totalStudents ?? '—'}</div><div className="stat-label">Total Students</div></div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon stat-icon-accent"><User size={22} /></div>
-          <div><div className="stat-value">{summary?.totalEmployees ?? '—'}</div><div className="stat-label">Total Employees</div></div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon stat-icon-warning"><Banknote size={22} /></div>
-          <div><div className="stat-value">{formatINR(summary?.totalFeeDues ?? 0)}</div><div className="stat-label">Fee Dues</div></div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon stat-icon-info"><Bell size={22} /></div>
-          <div><div className="stat-value">{summary?.totalAnnouncements ?? '—'}</div><div className="stat-label">Announcements</div></div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon stat-icon-success"><PartyPopper size={22} /></div>
-          <div><div className="stat-value">{summary?.totalHolidays ?? '—'}</div><div className="stat-label">Holidays</div></div>
-        </div>
+        {[
+          { to: '/admin/students',     icon: <Users size={22} />,        tint: 'stat-icon-primary', value: summary?.totalStudents ?? '—',              label: 'Total Students' },
+          { to: '/admin/employees',    icon: <User size={22} />,         tint: 'stat-icon-accent',  value: summary?.totalEmployees ?? '—',             label: 'Total Employees' },
+          { to: '/admin/fees',         icon: <Banknote size={22} />,     tint: 'stat-icon-warning', value: formatINR(summary?.totalFeeDues ?? 0),      label: 'Fee Dues' },
+          { to: '/admin/announcements',icon: <Bell size={22} />,         tint: 'stat-icon-info',    value: summary?.totalAnnouncements ?? '—',         label: 'Announcements' },
+          { to: '/admin/holidays',     icon: <PartyPopper size={22} />,  tint: 'stat-icon-success', value: summary?.totalHolidays ?? '—',              label: 'Holidays' },
+        ].map((c) => (
+          <Link key={c.to} to={c.to} className="stat-card stat-card--link">
+            <div className={`stat-icon ${c.tint}`}>{c.icon}</div>
+            <div>
+              <div className="stat-value">{c.value}</div>
+              <div className="stat-label">{c.label}</div>
+            </div>
+          </Link>
+        ))}
       </div>
 
       {/* Quick management */}

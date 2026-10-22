@@ -6,6 +6,16 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 
 :root {
+  /* The whole palette is light (ivory paper, ink type), so the app must tell
+     the browser that. Without this, a machine/OS in dark mode renders the
+     NATIVE parts of a form control — most visibly the <option> popup list of a
+     <select> — with the dark-scheme default text colour (near-white), while the
+     control itself keeps `.form-input`'s light background. The result is white
+     text on a white popup: the options are there and selectable, just
+     invisible. Declaring the scheme fixes the popup and the caret/scrollbar of
+     every native control at once, from one place. */
+  color-scheme: light;
+
   /* ── Type ─────────────────────────────────────────────────────────── */
   --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
   --font-body: 'Work Sans', -apple-system, 'Segoe UI', sans-serif;
@@ -20,6 +30,7 @@
   --ink-3: #8f866f;            /* dim / placeholder                  */
   --line: #ddd5c2;             /* hairline border                    */
   --line-2: #c7bda3;           /* stronger rule                      */
+  --input-surface: #fffdf6;    /* raised field surface (inputs/selects) */
 
   /* ── Accent — oxblood / burnt sienna ──────────────────────────────── */
   --oxblood: #8a3324;
@@ -78,6 +89,7 @@
 
   --sidebar-w: 252px;
   --sidebar-rail-w: 64px;      /* collapsed icon-only rail */
+  --drawer-w: 268px;           /* off-canvas drawer width (small screens) */
   --sidebar-bg: #241f17;
   --sidebar-text: #cfc7b4;
 }
@@ -146,6 +158,11 @@ input, select, textarea { font-family: inherit; }
 
 /* On small screens the expanded panel overlays as a drawer — content stays put */
 .app-layout.viewport-mobile.sidebar-open .main-content { margin-left: 0; }
+
+/* Small screens: "closed" means GONE, not "icon rail". The panel is off-canvas,
+   so no width is reserved and the page uses the full screen. This must out-rank
+   the unscoped rail rule above (4 classes vs 3) or the strip comes back. */
+.app-layout.viewport-mobile.sidebar-closed .main-content { margin-left: 0; }
 
 /* Dimmed backdrop behind the off-canvas drawer (small screens) — tap to dismiss */
 .sidebar-overlay {
@@ -259,6 +276,31 @@ input, select, textarea { font-family: inherit; }
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-3);
+}
+
+/* CLICKABLE STAT CARD */
+/* A summary card that navigates somewhere. Deliberately a MODIFIER rather than a
+   change to `.stat-card` itself: most stat cards across the app are plain
+   readouts, and giving every one of them a hover lift would advertise a click
+   that does not exist. The affordance mirrors `.overview-card:hover` below —
+   same border lift, same rise, same 150ms — so the summary row and the Quick
+   Management row read as one language rather than two.
+   `color: inherit` because the global `a` rule paints links oxblood and these
+   cards are surfaces, not text links; `.stat-value`/`.stat-label` already carry
+   their own colours, so nothing inside them changes either way. */
+.stat-card--link {
+  color: inherit;
+  cursor: pointer;
+  transition: border-color var(--transition), transform var(--transition);
+}
+.stat-card--link:hover {
+  border-color: var(--line-2);
+  transform: translateY(-1px);
+}
+/* Keyboard users need the same "this is a destination" signal a mouse gets. */
+.stat-card--link:focus-visible {
+  outline: 2px solid var(--oxblood);
+  outline-offset: 2px;
 }
 
 /* ═══════════════════════════════════════════════════ INFO GRID */
@@ -440,6 +482,20 @@ button.cal-day.compact.holiday:focus-visible {
   font-weight: 600;
 }
 
+/* Weekly off days (the school setting) — deliberately NOT a holiday gold:
+   neutral shade + dashed border, so a weekly off reads separately from a real
+   holiday on the Holidays page. Saturdays are ordinary working days. */
+.cal-day.compact.weekly-off {
+  background: var(--paper-2);
+  border: 1px dashed var(--line-2);
+  color: var(--ink-3);
+}
+.att-cal-day.weekly-off {
+  background: var(--paper-2);
+  border: 1px dashed var(--line-2);
+  color: var(--ink-3);
+}
+
 /* ═══════════════════════════════════════════════════ PROGRESS */
 .progress-track {
   height: 6px;
@@ -506,6 +562,11 @@ button.cal-day.compact.holiday:focus-visible {
 .badge-holiday {
   background: var(--gold-soft); color: var(--gold);
   border: 1px dashed #cdbd85;
+}
+/* Weekly off — the school setting, visually separate from a real holiday. */
+.badge-weekly-off {
+  background: var(--paper-2); color: var(--ink-3);
+  border: 1px dashed var(--line-2);
 }
 /* ═══════════════════════════════════════════════════ TOPIC CHIPS */
 /* Syllabus completion — done: soft green stamp; pending: neutral outline. */

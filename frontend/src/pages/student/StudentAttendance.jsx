@@ -1,13 +1,16 @@
 import { useCallback } from 'react';
-import { CalendarCheck, XCircle, CalendarDays } from 'lucide-react';
+import { CalendarCheck, XCircle, Hourglass, CalendarDays } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 import AttendanceCalendarWithReminders from '../../components/AttendanceCalendarWithReminders';
 
-/** What this portal's calendar can show — one pill per status it can render. */
+/** What this portal's calendar can show — one pill per status it can render.
+ *  Half-day is produced by the server's FN/AN session merge (one session
+ *  present, the other absent), so it belongs in the legend once sessions exist. */
 const LEGEND = [
   { label: 'Present', tone: 'active' },
   { label: 'Absent', tone: 'absent' },
+  { label: 'Half Day', tone: 'half-day' },
   { label: 'Holiday', tone: 'holiday' },
 ];
 
@@ -40,10 +43,14 @@ export default function StudentAttendance() {
       titles[iso] = `Holiday: ${h.name}`;
     });
 
-    const counts = { present: 0, absent: 0 };
+    const counts = { present: 0, absent: 0, halfDay: 0 };
     Object.entries(records).forEach(([iso, status]) => {
       if (holidayOn[iso]) return; // that day is shown as a holiday, not a class day
-      if (!status) return;
+      // A stored 'holiday' status is the old weekend marker (the app never
+      // writes it); off days now come from the weekly-off setting and real
+      // holidays. Skipping it here never alters the saved row — a Saturday
+      // with a legacy 'holiday' record simply shows as the working day it is.
+      if (!status || status === 'holiday') return;
       classes[iso] = status;
       if (counts[status] !== undefined) counts[status] += 1;
     });
@@ -54,6 +61,7 @@ export default function StudentAttendance() {
       stats: [
         { icon: CalendarCheck, tone: 'info', value: counts.present, label: 'Days Present' },
         { icon: XCircle, tone: 'danger', value: counts.absent, label: 'Days Absent' },
+        { icon: Hourglass, tone: 'warning', value: counts.halfDay, label: 'Half Days' },
         { icon: CalendarDays, tone: 'success', value: holidays.length, label: 'Holidays' },
       ],
     };

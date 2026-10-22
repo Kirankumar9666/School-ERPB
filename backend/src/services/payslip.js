@@ -99,9 +99,14 @@ const detailPair = (doc, label, value, x) => {
  * Build the payslip PDF.
  * @param {object} employee  raw Prisma Employee row
  * @param {object} record    raw Prisma PayrollRecord row (that month)
+ * @param {object} [payment] Optional derived payment summary (services/payroll.js
+ *   `summarizePayments`). Omitted → the slip falls back to the record's own
+ *   `paidOn`, so a caller that has not loaded the payments still gets a valid
+ *   document rather than a crash.
  * @returns {Promise<Buffer>}
  */
-const buildPayslipPdf = async (employee, record) => {
+const buildPayslipPdf = async (employee, record, payment = null) => {
+  const paidTotal = payment ? payment.paidTotal : 0;
   const doc = new PDFDocument({
     size: 'A4',
     margins: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN },
@@ -153,6 +158,15 @@ const buildPayslipPdf = async (employee, record) => {
   if (record.paidOn) {
     doc.font('body-bold').fontSize(10).fillColor(GREEN)
       .text(`Paid on ${fmtDate(record.paidOn)}`, COL_SPLIT, doc.y + 13, { lineBreak: false });
+  } else if (paidTotal > 0) {
+    // A partially-paid month has no completion date, so "Payment pending" alone
+    // would read as "nothing has been paid" — which is false, and this slip is
+    // the document the employee keeps. States the split instead.
+    doc.font('body-bold').fontSize(10).fillColor(GOLD)
+      .text(
+        `Part paid ${money(paidTotal)} of ${money(record.netSalary)}`,
+        COL_SPLIT, doc.y + 13, { lineBreak: false },
+      );
   } else {
     doc.font('body-bold').fontSize(10).fillColor(GOLD)
       .text('Payment pending', COL_SPLIT, doc.y + 13, { lineBreak: false });

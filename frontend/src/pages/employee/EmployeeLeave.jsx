@@ -2,16 +2,25 @@ import { useEffect, useState } from 'react';
 import { Umbrella, Send, Info } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
+import LoadErrorState from '../../components/LoadErrorState';
+import { useLoadState } from '../../utils/useLoadState';
 import { loadOptions, optionLabel } from '../../services/options';
-import toast from 'react-hot-toast';
-
-/** Leave requests are "pending" until an admin decides (LeaveStatus enum) */
-const LEAVE_STATUS_BADGE = { pending: 'badge-pending', approved: 'badge-approved', rejected: 'badge-rejected' };
+import toast from '../../services/toast';
+import LeaveReasonCell from '../../components/LeaveReason';
+import { LEAVE_REASON_MAX, LEAVE_STATUS_BADGE, normalizeReason } from '../../utils/leave';
+import { shortDate } from '../../utils/date';
 
 /**
  * Employee Leave — apply + history + balance tracker.
+ *
  * The leave-type list is the LeaveType enum served by /school/options, so the
  * form can never offer a type the API would reject.
+ *
+ * The reason is multi-line free text and is treated as such end to end: the
+ * textarea submits line breaks, the server normalises them without flattening
+ * them (`normalizeReason` in `utils/leave.js` mirrors the server exactly), and
+ * the history's Reason column is the shared `LeaveReasonCell`, which renders those
+ * breaks under `white-space: pre-line` and clamps to 2 lines.
  */
 export default function EmployeeLeave() {
   const { user } = useAuth();
@@ -20,7 +29,10 @@ export default function EmployeeLeave() {
   const [form, setForm] = useState({ type: '', fromDate: '', toDate: '', reason: '' });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
+  // `error` above is this form's own validation/submit message, so the load
+  // failure from the hook is aliased — the page-level error state and the
+  // inline form error must be able to coexist.
+  const { loading, setLoading, error: loadError, reloadKey, retry, fail } = useLoadState();
   const empId = user?.linkedEntityId;
 
   useEffect(() => {
@@ -31,13 +43,29 @@ export default function EmployeeLeave() {
         setLeaveTypes(o.enums.leaveTypes);
         setForm((f) => ({ ...f, type: f.type || o.enums.leaveTypes[0] || '' }));
       })
+      .catch(fail)
       .finally(() => setLoading(false));
-  }, [empId]);
+  }, [empId, reloadKey, fail, setLoading]);
+
+  /**
+   * The length the SERVER will measure: the same normalisation the apply route
+   * applies before validating. Counting the raw textarea value instead would
+   * count a CRLF as 2 characters where the server stores 1, so the counter would
+   * drift away from the 500 limit on exactly the multi-line reasons this field
+   * exists for. The textarea's own `maxLength` still guards the raw input, which
+   * is the stricter of the two and can only ever keep the user inside the limit.
+   */
+  const reasonLength = normalizeReason(form.reason).length;
+  const reasonTooLong = reasonLength > LEAVE_REASON_MAX;
+  const reasonNearLimit = !reasonTooLong && reasonLength > LEAVE_REASON_MAX * 0.9;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    if (!form.fromDate || !form.toDate || form.reason.trim().length < 5) {
+    // Normalised here too, so what is counted, what is validated and what is
+    // sent are all the same string.
+    const reason = normalizeReason(form.reason);
+    if (!form.fromDate || !form.toDate || reason.length < 5) {
       setError('Fill in the dates and a reason (at least 5 characters).');
       return;
     }
@@ -47,8 +75,10 @@ export default function EmployeeLeave() {
     }
     setSubmitting(true);
     try {
+      // Sent exactly as typed (newlines and blank lines intact) — NOT reflowed
+      // into one line. The server trims the ends and stores the rest verbatim.
       await api.post(`/employees/${empId}/leaves/apply`, {
-        type: form.type, fromDate: form.fromDate, toDate: form.toDate, reason: form.reason.trim(),
+        type: form.type, fromDate: form.fromDate, toDate: form.toDate, reason,
       });
       toast.success('Leave application submitted!');
       setForm((f) => ({ ...f, type: leaveTypes[0] || '', fromDate: '', toDate: '', reason: '' }));
@@ -60,6 +90,20 @@ export default function EmployeeLeave() {
       setSubmitting(false);
     }
   };
+
+  // Before the `loading || !data` guard, not after: on a failed load `data`
+  // stays null forever, so a guard of `loading || !data` would spin forever.
+  if (loadError) {
+    return (
+      <LoadErrorState
+        title="Leave Management"
+        subtitle="Apply, track and manage your leave"
+        detail={loadError}
+        onRetry={retry}
+        icon={Umbrella}
+      />
+    );
+  }
 
   if (loading || !data) return <div className="loading-center"><div className="spinner" /></div>;
 
@@ -117,13 +161,28 @@ export default function EmployeeLeave() {
             </div>
 
             <div className="form-group">
-              <label className="form-label" htmlFor="leave-reason">Reason</label>
+              <div className="label-row">
+                <label className="form-label" htmlFor="leave-reason">Reason</label>
+                {/* Live counter on the NORMALISED length, so it always agrees with
+                    the server's 500-character limit. Amber as the limit is
+                    approached, red past it, so the cap is visible before the
+                    textarea silently stops accepting keystrokes. */}
+                <span
+                  className={`field-counter${reasonTooLong ? ' over' : reasonNearLimit ? ' near' : ''}`}
+                  aria-live="polite"
+                >
+                  {reasonLength} / {LEAVE_REASON_MAX}
+                </span>
+              </div>
               <textarea
                 id="leave-reason"
                 className="form-input"
-                rows={3}
-                maxLength={500}
-                placeholder="Write a brief reason for your leave..."
+                rows={4}
+                maxLength={LEAVE_REASON_MAX}
+                placeholder={'Write a brief reason for your leave...\n\nUse separate lines for separate points.'}
+                /* The input side needs pre-wrap too, or a newline typed here would
+                   be invisible until the text was submitted and read back. */
+                style={{ whiteSpace: 'pre-wrap' }}
                 value={form.reason}
                 onChange={(e) => setForm({ ...form, reason: e.target.value })}
               />
@@ -136,7 +195,10 @@ export default function EmployeeLeave() {
         </div>
       </div>
 
-      {/* History */}
+      {/* History — the Reason cell is the shared clamped one. `pre-line` keeps the
+          line breaks the employee typed, the 2-line clamp keeps every row a
+          consistent height, and "View more" appears only when the text is
+          genuinely cut off. */}
       <div className="section">
         <div className="section-title"><Umbrella size={14} /> Leave History</div>
         {data.history.length === 0 ? (
@@ -156,9 +218,9 @@ export default function EmployeeLeave() {
                     <td style={{ textTransform: 'capitalize' }}>{l.type}</td>
                     <td>{l.fromDate}</td>
                     <td>{l.toDate}</td>
-                    <td>{l.reason}</td>
+                    <td className="reason-cell"><LeaveReasonCell leave={l} /></td>
                     <td><span className={`badge ${LEAVE_STATUS_BADGE[l.status] || 'badge-pending'}`}>{l.status}</span></td>
-                    <td>{new Date(l.appliedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</td>
+                    <td>{shortDate(l.appliedAt)}</td>
                   </tr>
                 ))}
               </tbody>

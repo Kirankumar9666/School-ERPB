@@ -68,3 +68,61 @@ test('null/undefined records input is safe', () => {
   const s = summarizeAttendance(null);
   assert.equal(s.percent, 0);
 });
+
+/* ---- FN/AN session merge + day aggregation ---- */
+
+const { mergeDayStatus, buildDayRecords } = require('../src/utils/attendance');
+
+test('mergeDayStatus: both sessions agree → that status; holiday and single-session cases', () => {
+  assert.equal(mergeDayStatus('present', 'present'), 'present');
+  assert.equal(mergeDayStatus('absent', 'absent'), 'absent');
+  assert.equal(mergeDayStatus('late', 'late'), 'late');
+  assert.equal(mergeDayStatus(null, null), null);
+
+  // One session recorded (FN marked before AN) → the day shows what is known.
+  assert.equal(mergeDayStatus('present', null), 'present');
+  assert.equal(mergeDayStatus(null, 'absent'), 'absent');
+
+  // A holiday on either session makes the whole day a holiday.
+  assert.equal(mergeDayStatus('holiday', 'present'), 'holiday');
+  assert.equal(mergeDayStatus('present', 'holiday'), 'holiday');
+});
+
+test('mergeDayStatus: sessions differing → the existing half-day concept; late wins over present', () => {
+  assert.equal(mergeDayStatus('present', 'absent'), 'half-day');
+  assert.equal(mergeDayStatus('absent', 'present'), 'half-day');
+  assert.equal(mergeDayStatus('late', 'absent'), 'half-day');
+  assert.equal(mergeDayStatus('present', 'half-day'), 'half-day');
+  assert.equal(mergeDayStatus('late', 'present'), 'late');
+});
+
+test('buildDayRecords: session rows collapse to day records with summed hours', () => {
+  const rows = [
+    { date: new Date('2026-09-01T00:00:00.000Z'), session: 'FN', status: 'present', workingHours: 4 },
+    { date: new Date('2026-09-01T00:00:00.000Z'), session: 'AN', status: 'present', workingHours: 4 },
+    { date: new Date('2026-09-02T00:00:00.000Z'), session: 'FN', status: 'present', workingHours: 4 },
+    { date: new Date('2026-09-02T00:00:00.000Z'), session: 'AN', status: 'absent', workingHours: 0 },
+    { date: new Date('2026-09-03T00:00:00.000Z'), session: 'FN', status: 'absent', workingHours: 0 },
+  ];
+
+  const dayRecords = buildDayRecords(rows, true);
+  assert.deepEqual(dayRecords['2026-09-01'], { status: 'present', workingHours: 8 });
+  assert.deepEqual(dayRecords['2026-09-02'], { status: 'half-day', workingHours: 4 });
+  assert.deepEqual(dayRecords['2026-09-03'], { status: 'absent', workingHours: 0 });
+
+  // A single-session day keeps that session's status and hours.
+  const partial = buildDayRecords(
+    [{ date: new Date('2026-09-04T00:00:00.000Z'), session: 'AN', status: 'present', workingHours: 4 }],
+    true,
+  );
+  assert.deepEqual(partial['2026-09-04'], { status: 'present', workingHours: 4 });
+
+  const studentShape = buildDayRecords(
+    [
+      { date: new Date('2026-09-01T00:00:00.000Z'), session: 'FN', status: 'present' },
+      { date: new Date('2026-09-01T00:00:00.000Z'), session: 'AN', status: 'absent' },
+    ],
+    false,
+  );
+  assert.equal(studentShape['2026-09-01'], 'half-day');
+});

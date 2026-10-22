@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bell, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Bell, CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 import ReminderSection from './ReminderSection';
+import LoadErrorState from './LoadErrorState';
+import { describeLoadError } from '../utils/useLoadState';
 import { monthShift, monthLabel, buildCalendar, todayISO } from '../utils/date';
+import { useWeeklyOffDays, weekdayOfISO } from '../utils/useWeeklyOffDays';
 
 /** Column headers — Sunday first, matching `getDay()` (0 = Sunday), which is
  *  what `buildCalendar` uses to place day 1. Not a month offset: the grid
@@ -39,10 +42,12 @@ const EMPTY = { classes: {}, titles: {}, stats: [], header: null };
 export default function AttendanceCalendarWithReminders({ loadMonth, legend = [] }) {
   const [offset, setOffset] = useState(0);
   const [rev, setRev] = useState(0); // bumped when a reminder is added/removed
+  // The school's one weekly-off setting — read live, never a hardcoded weekend.
+  const weeklyOffDays = useWeeklyOffDays();
   // Last *settled* load: the request key it belongs to + its data. `loading`
   // below is derived from that key, so the effect never has to setState()
   // synchronously to flip the spinner on.
-  const [settled, setSettled] = useState({ key: null, data: EMPTY });
+  const [settled, setSettled] = useState({ key: null, data: EMPTY, error: '' });
 
   // Keep the newest loader in a ref instead of the effect's deps: pages define
   // it inline, so depending on its identity would refetch on every render.
@@ -56,14 +61,22 @@ export default function AttendanceCalendarWithReminders({ loadMonth, legend = []
   useEffect(() => {
     let alive = true;
     loader.current(monthShift(offset))
-      .then((d) => { if (alive) setSettled({ key: requestKey, data: { ...EMPTY, ...d } }); })
-      .catch(() => { if (alive) setSettled({ key: requestKey, data: EMPTY }); });
+      .then((d) => { if (alive) setSettled({ key: requestKey, data: { ...EMPTY, ...d }, error: '' }); })
+      // Recorded rather than folded back into EMPTY. This catch used to hand
+      // back the same object as a month with genuinely nothing in it, so a 500
+      // drew an entirely unmarked calendar — indistinguishable from "no
+      // attendance has been taken yet", which is a very different claim.
+      .catch((err) => { if (alive) setSettled({ key: requestKey, data: EMPTY, error: describeLoadError(err) }); });
     return () => { alive = false; };
   }, [offset, requestKey]);
+
+  /** Re-run the month that just failed. `rev` is part of `requestKey`. */
+  const retry = () => setRev((n) => n + 1);
 
   const cells = buildCalendar(m.year, m.month);
   const today = todayISO();
   const { classes, titles, stats, header } = settled.data;
+  const { error } = settled;
 
 
   return (
@@ -118,34 +131,43 @@ export default function AttendanceCalendarWithReminders({ loadMonth, legend = []
                 </button>
               </div>
 
-              {/* Horizontal-scroll fallback: the compact grid fits 7 columns at
+              {error ? (
+                <LoadErrorState compact detail={error} onRetry={retry} icon={CalendarDays} />
+              ) : (
+                <>
+                  {/* Horizontal-scroll fallback: the compact grid fits 7 columns at
                   every width we measured, so this wrapper never scrolls in
-                  practice — it exists so a day can never become unreachable on
-                  an unusually narrow screen. */}
-              <div className="cal-scroll">
-                <div className="calendar-grid compact">
-                  {DAY_HEADERS.map((d) => <div key={d} className="cal-day-header">{d}</div>)}
-                  {cells.map((cell, idx) => !cell.inMonth ? (
-                    <div key={`e-${idx}`} className="cal-day empty compact" />
-                  ) : (
-                    <div
-                      key={cell.iso}
-                      className={`cal-day compact ${cell.iso === today ? 'today ' : ''}${classes[cell.iso] || ''}`}
-                      title={titles[cell.iso]}
-                    >
-                      {cell.day}
+                      practice — it exists so a day can never become unreachable on
+                      an unusually narrow screen. */}
+                  <div className="cal-scroll">
+                    <div className="calendar-grid compact">
+                      {DAY_HEADERS.map((d) => <div key={d} className="cal-day-header">{d}</div>)}
+                      {cells.map((cell, idx) => !cell.inMonth ? (
+                        <div key={`e-${idx}`} className="cal-day empty compact" />
+                      ) : (
+                        <div
+                          key={cell.iso}
+                          className={`cal-day compact ${cell.iso === today ? 'today ' : ''}${classes[cell.iso] || (weeklyOffDays.includes(weekdayOfISO(cell.iso)) ? 'weekly-off' : '')}`}
+                          title={titles[cell.iso]}
+                        >
+                          {cell.day}
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </div>
+                  </div>
 
-              {legend.length > 0 && (
-                <div className="att-legend">
-                  <span className="text-muted text-sm">Legend:</span>
-                  {legend.map((l) => (
-                    <span key={l.label} className={`badge badge-${l.tone || 'muted'}`}>{l.label}</span>
-                  ))}
-                </div>
+                  {(legend.length > 0 || weeklyOffDays.length > 0) && (
+                    <div className="att-legend">
+                      <span className="text-muted text-sm">Legend:</span>
+                      {legend.map((l) => (
+                        <span key={l.label} className={`badge badge-${l.tone || 'muted'}`}>{l.label}</span>
+                      ))}
+                      {weeklyOffDays.length > 0 && (
+                        <span className="badge badge-weekly-off">Weekly Off</span>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </>
           )}

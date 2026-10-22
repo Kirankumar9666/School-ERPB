@@ -4,10 +4,10 @@ import api from '../../services/api';
 import { loadOptions } from '../../services/options';
 import ClassSelect from '../../components/ClassSelect';
 import ConfirmModal from '../../components/ConfirmModal';
-import toast from 'react-hot-toast';
+import LoadErrorState from '../../components/LoadErrorState';
+import { describeLoadError } from '../../utils/useLoadState';
+import toast from '../../services/toast';
 
-/** '10' + 'A' → 'cls-10A' (same id format the class list uses) */
-const classIdOf = (grade, section) => `cls-${String(grade)}${String(section).toUpperCase()}`;
 
 const fmtDate = (iso) => new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
@@ -77,12 +77,16 @@ export default function AdminDocuments() {
         setStudents(s.data.data || []);
         setEmployees(e.data.data || []);
       })
-      .catch(() => setLoadError(true))
+      .catch((err) => setLoadError(describeLoadError(err)))
       .finally(() => setLoading(false));
   }, [reloadKey]);
 
   /** Roster of the selected class, narrowed live by the name/roll-no search */
-  const roster = students.filter((s) => classIdOf(s.class, s.section) === classKey);
+  // The student's REAL class id, read off the row. This used to be rebuilt as
+  // `cls-${class}${section}`, which is right while a level name is a number and
+  // silently produces 'cls--2A' for Nursery — so selecting that class in the
+  // dropdown would filter the roster down to nothing.
+  const roster = students.filter((s) => s.classId === classKey);
   const studentTerm = studentQuery.trim().toLowerCase();
   const classStudents = roster.filter((s) => !studentTerm
     || [s.name, s.rollNumber].some((v) => String(v ?? '').toLowerCase().includes(studentTerm)));
@@ -234,23 +238,13 @@ export default function AdminDocuments() {
 
   if (loadError) {
     return (
-      <div className="page fade-in">
-        <div className="page-header">
-          <div className="page-title">Document Management</div>
-          <div className="page-subtitle">Student and employee document records</div>
-        </div>
-        <div className="empty-state">
-          <FileText size={40} />
-          Could not load the class, student or employee lists. Check that the API is running.
-          <button
-            className="btn btn-primary btn-sm"
-            style={{ marginTop: 'var(--sp-md)' }}
-            onClick={() => { setLoadError(false); setLoading(true); setReloadKey((k) => k + 1); }}
-          >
-            Retry
-          </button>
-        </div>
-      </div>
+      <LoadErrorState
+        title="Document Management"
+        subtitle="Student and employee document records"
+        detail={loadError}
+        onRetry={() => { setLoadError(false); setLoading(true); setReloadKey((k) => k + 1); }}
+        icon={FileText}
+      />
     );
   }
 

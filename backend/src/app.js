@@ -11,6 +11,7 @@ const authRoutes = require('./modules/auth/auth.routes');
 const studentRoutes = require('./modules/students/students.routes');
 const employeeRoutes = require('./modules/employees/employees.routes');
 const schoolRoutes = require('./modules/school/school.routes');
+const feesRoutes = require('./modules/fees/fees.routes');
 const adminRoutes = require('./modules/admin/admin.routes');
 
 const { sendError } = require('./utils/response');
@@ -28,8 +29,11 @@ process.on('unhandledRejection', (err) => {
 });
 
 // Behind one reverse proxy (nginx/traefik) — makes req.ip and express-rate-limit
-// see the real client IP instead of the proxy's.
-app.set('trust proxy', 1);
+// see the real client IP instead of the proxy's. How many proxies to trust is
+// configured by TRUST_PROXY (see config/env.js): 0/false = none (a direct
+// connection, or local dev — the header is ignored so it cannot be spoofed),
+// 1 = one proxy, 2 = two hops, and so on.
+app.set('trust proxy', config.trustProxy);
 
 // ─── Security Middleware ───────────────────────────────────────────────────
 app.use(helmet()); // Sets secure HTTP headers
@@ -79,6 +83,7 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/students', studentRoutes);
 app.use('/api/v1/employees', employeeRoutes);
 app.use('/api/v1/school', schoolRoutes);
+app.use('/api/v1/fees', feesRoutes);
 app.use('/api/v1/admin', adminRoutes);
 
 // ─── 404 Handler ──────────────────────────────────────────────────────────
@@ -87,8 +92,46 @@ app.use((req, res) => {
 });
 
 // ─── Global Error Handler ─────────────────────────────────────────────────
+/**
+ * Body-parser failures are CLIENT errors, not server faults, and must not be
+ * reported as 500s.
+ *
+ * express.json() throws a SyntaxError flagged `type: 'entity.parse.failed'`
+ * (bad JSON) or an object flagged `entity.too.large` when the body exceeds the
+ * 1mb limit. Both carry a 4xx `status`/`statusCode`. The old handler ignored
+ * that and answered every throw with 500 SERVER_ERROR, so a client typo in a
+ * request body looked like a broken server and logged an [ERROR] line in
+ * production. This maps the known body-parser types to their real status and a
+ * stable code, and falls through to 500 for anything genuinely unexpected.
+ */
+const CLIENT_ERROR_CODES = {
+  'entity.parse.failed': [400, 'INVALID_JSON'],
+  'entity.too.large': [413, 'PAYLOAD_TOO_LARGE'],
+  'encoding.unsupported': [415, 'UNSUPPORTED_ENCODING'],
+  'request.aborted': [400, 'REQUEST_ABORTED'],
+};
+
+const clientErrorFor = (err) => {
+  const mapped = CLIENT_ERROR_CODES[err?.type];
+  if (mapped) return mapped;
+  // Any error that already carries a 4xx status is a client error by definition.
+  const status = err?.status ?? err?.statusCode;
+  if (Number.isInteger(status) && status >= 400 && status < 500) {
+    return [status, 'BAD_REQUEST'];
+  }
+  return null;
+};
+
 // eslint-disable-next-line no-unused-vars
-app.use((err, req, res, next) => {
+const globalErrorHandler = (err, req, res, next) => {
+  const clientError = clientErrorFor(err);
+  if (clientError) {
+    const [status, code] = clientError;
+    // Message only, at warn level: this is the caller's mistake, not ours.
+    console.warn('[CLIENT-ERROR]', `${status} ${code}:`, err.message);
+    return sendError(res, err.message || 'Invalid request', status, code);
+  }
+
   // Message only by default (no stack, no request data). LOG_LEVEL=debug
   // opts into the stack trace for diagnosis — temporary use only.
   if (config.logLevel === 'debug') {
@@ -97,10 +140,18 @@ app.use((err, req, res, next) => {
     console.error('[ERROR]', err.message);
   }
   sendError(res, 'Internal server error', 500, 'SERVER_ERROR');
-});
+};
+
+app.use(globalErrorHandler);
 
 // ─── Server entry lives in src/server.js ──────────────────────────────────
 // app.js exports the configured app only, so tests can boot it on an
-// ephemeral port without binding the real listener.
+// ephemeral port without binding the real listener. `clientErrorFor` and
+// `globalErrorHandler` are attached for the error-handling test: it pins the
+// rule that decides client-error vs. genuine 500 and exercises the real
+// handler, without a test having to reproduce each throw shape through a
+// live request.
 
 module.exports = app;
+module.exports.clientErrorFor = clientErrorFor;
+module.exports.globalErrorHandler = globalErrorHandler;

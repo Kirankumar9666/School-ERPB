@@ -52,7 +52,8 @@ test('students bulk upload: CSV, auto roll numbers, atomic rejection, XLSX', asy
     assert.equal(res.body.data.accountsCreated, 3); // one login per student
     assert.equal(
       res.body.message,
-      '3 students added · 3 login accounts created (initial password = guardian contact)',
+      '3 students added · 3 login accounts created (initial password = guardian contact — '
+      + 'returned in this response only, it cannot be retrieved afterwards)',
     ); // derived, not hardcoded
 
     const created = res.body.data.created;
@@ -136,14 +137,31 @@ test('students bulk upload: CSV, auto roll numbers, atomic rejection, XLSX', asy
     const res = await fetch(`${base}/admin/students/bulk`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...auth(admin.accessToken) },
-      body: JSON.stringify({ students: [{ name: 'Json Kid', class: '6', section: 'A' }] }),
+      body: JSON.stringify({
+        students: [{
+          name: 'Json Kid', class: '6', section: 'A',
+          parentName: 'Json Guardian', guardianContact: '+91-9000000009',
+        }],
+      }),
     });
     assert.equal(res.status, 201);
     const { data } = await res.json();
     assert.equal(data.created[0].rollNumber, `STU-${new Date().getFullYear()}-001`);
-    // no guardian contact in the JSON → no password to derive → no account
-    assert.equal(data.accountsCreated, 0);
-    assert.deepEqual(data.accounts, []);
+    // The contact is what the password derives from, so a contact means an account.
+    assert.equal(data.accountsCreated, 1);
+    assert.equal(data.accounts[0].username, 'json.kid');
+  });
+
+  await t.test('the JSON fallback refuses a row missing a guardian field, naming it', async () => {
+    const res = await fetch(`${base}/admin/students/bulk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...auth(admin.accessToken) },
+      body: JSON.stringify({ students: [{ name: 'No Guardian Kid', class: '6', section: 'A' }] }),
+    });
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.ok(body.errors.row_1.parentName, 'a blank guardian name must be named');
+    assert.ok(body.errors.row_1.guardianContact, 'a blank contact must be named');
   });
 
   await t.test('bulk-created students get logins: username from name, contact as password', async () => {
@@ -173,7 +191,7 @@ test('students bulk upload: CSV, auto roll numbers, atomic rejection, XLSX', asy
     assert.ok(kavya.linkedEntityId, 'account is linked to the student record');
   });
 
-  await t.test('single Add Student also auto-creates the login (skipped without contact)', async () => {
+  await t.test('single Add Student also auto-creates the login, and guardian fields are now required', async () => {
     const post = (body) => fetch(`${base}/admin/students`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...auth(admin.accessToken) },
@@ -181,27 +199,81 @@ test('students bulk upload: CSV, auto roll numbers, atomic rejection, XLSX', asy
     });
 
     const withContact = await (await post({
-      name: 'Rohit Verma', class: '7', section: 'A', guardianContact: '+91-9000000003',
+      name: 'Rohit Verma', class: '7', section: 'A',
+      parentName: 'Rohit Guardian', guardianContact: '+91-9000000003',
     })).json();
     assert.equal(withContact.data.account.username, 'rohit.verma');
-    assert.equal(withContact.message, 'Student created. Login: rohit.verma (initial password = guardian contact)');
-    await login(base, 'rohit.verma', '+91-9000000003'); // contact works as the password
+    // The derivation rule is stated in the create response and NOWHERE else —
+    // this is the one-time handover moment; no later read returns it.
+    assert.ok(
+      withContact.message.startsWith('Student created. Login: rohit.verma (initial password = guardian contact'),
+      `create message should state the initial password once — got: ${withContact.message}`,
+    );
+    assert.match(withContact.message, /cannot be retrieved afterwards/);
+    const studentLogin = await login(base, 'rohit.verma', '+91-9000000003'); // contact works as the password
+    assert.equal(studentLogin.user.mustChangePassword, true,
+      'a login provisioned from the guardian contact must be forced to change it');
 
     // the student's profile exposes the username for the admin to hand out
     const prof = await fetch(`${base}/students/${withContact.data.id}/profile`, { headers: auth(admin.accessToken) });
     assert.equal(prof.status, 200);
     assert.equal((await prof.json()).data.username, 'rohit.verma');
 
-    // no guardian contact → no account (nothing to derive a password from)
-    const without = await (await post({ name: 'No Contact Kid', class: '7', section: 'A' })).json();
-    assert.equal(without.data.account, null);
-    assert.equal(without.message, 'Student created');
-    const fail = await fetch(`${base}/auth/login`, {
+    // A guardian name or contact may no longer be left blank on Add Student:
+    // they are the identity the duplicate rule matches on and what the initial
+    // password is derived from.
+    const parsed = async (promise) => {
+      const res = await promise;
+      return { status: res.status, body: await res.json() };
+    };
+    const without = await parsed(post({ name: 'No Contact Kid', class: '7', section: 'A' }));
+    assert.equal(without.status, 400);
+    assert.ok(without.body.errors.parentName, 'a blank guardian name is refused');
+    assert.ok(without.body.errors.guardianContact, 'a blank contact is refused');
+
+    const shortContact = await parsed(post({
+      name: 'Short Contact Kid', class: '7', section: 'A', parentName: 'Somebody', guardianContact: '98765',
+    }));
+    assert.equal(shortContact.status, 400);
+    assert.ok(shortContact.body.errors.guardianContact, 'a short contact is refused');
+    const nothing = await fetch(`${base}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: 'no.contact.kid', password: 'whatever' }),
     });
-    assert.equal(fail.status, 401, 'no account was created for the contactless student');
+    assert.equal(nothing.status, 401, 'no student — and no account — was created for the refused payload');
+  });
+
+  /* Bulk Add's roll-number generation deliberately walks EVERY student — roll
+     numbering is per class, so finding the next free number means seeing each
+     class's existing sequence. It read `s.class.grade` unguarded, and
+     `Student.classId` is nullable now: one graduate anywhere in the school made
+     this file 500 before a single row had been validated, so Bulk Add would
+     simply stop working the moment anyone graduated a class. */
+  await t.test('a file still uploads after a class has been passed out', async () => {
+    const overview = (await (await fetch(`${base}/admin/class-management/overview`,
+      { headers: auth(admin.accessToken) })).json()).data;
+    const top = overview.classes.find((c) => c.action === 'passed_out');
+    assert.ok(top, 'the school must have a graduating class for this to prove anything');
+
+    const out = await fetch(`${base}/admin/class-management/classes/${top.id}/pass-out`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...auth(admin.accessToken) },
+      body: '{}',
+    });
+    assert.equal(out.status, 200, `pass out should succeed: ${await out.text()}`);
+
+    const grads = (await listStudents()).filter((s) => s.class === null);
+    assert.ok(grads.length > 0, 'the pass-out must have produced students with no class');
+
+    const csv = [
+      CSV_HEADER,
+      'Zoya Iyer,7,A,,Farhan Iyer,+91-9000000005,0',
+    ].join('\r\n');
+    const res = await upload(base, admin.accessToken, csv, 'students.csv', 'text/csv');
+    assert.equal(res.status, 201,
+      `bulk add must survive a school containing graduates: ${JSON.stringify(res.body)}`);
+    assert.equal(res.body.data.count, 1);
   });
 
   await t.test('non-admin callers are rejected', async () => {

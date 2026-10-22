@@ -2,29 +2,46 @@ import { useEffect, useState } from 'react';
 import { DollarSign, Download, Info, Loader2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
-import toast from 'react-hot-toast';
+import LoadErrorState from '../../components/LoadErrorState';
+import { useLoadState } from '../../utils/useLoadState';
+import toast from '../../services/toast';
 import { downloadBlob, filenameFromDisposition, payslipFilename } from '../../utils/download';
 
 const formatINR = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
+
+const payDate = (iso) => {
+  if (!iso) return '—';
+  const d = new Date(`${iso}T00:00:00`);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+};
 
 /**
  * Employee Payroll — monthly salary details (read-only) + downloadable slip.
  * The Slip button fetches a server-generated PDF payslip (composed from the
  * employee's profile + that month's payroll record) and saves it under the
  * filename the backend chose.
+ *
+ * A month is paid in instalments, so the payment state is shown as the same
+ * three states the Admin Panel and the PDF use — pending / partially paid /
+ * paid — with the running total and the balance. Those figures are derived
+ * server-side by the same service the office's screen uses, so what an employee
+ * reads here cannot contradict what the admin recorded.
  */
 export default function EmployeePayroll() {
   const { user } = useAuth();
   const [payroll, setPayroll] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { loading, setLoading, error, reloadKey, retry, fail } = useLoadState();
   const [downloading, setDownloading] = useState(null); // month currently generating
 
   useEffect(() => {
     if (!user?.linkedEntityId) return;
     api.get(`/employees/${user.linkedEntityId}/payroll`)
       .then((r) => setPayroll(r.data.data || []))
+      .catch(fail)
       .finally(() => setLoading(false));
-  }, [user]);
+  }, [user, reloadKey, fail, setLoading]);
 
   const downloadSlip = async (p) => {
     setDownloading(p.month);
@@ -46,6 +63,18 @@ export default function EmployeePayroll() {
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
 
+  if (error) {
+    return (
+      <LoadErrorState
+        title="Payroll"
+        subtitle="Monthly salary details — read only"
+        detail={error}
+        onRetry={retry}
+        icon={DollarSign}
+      />
+    );
+  }
+
   return (
     <div className="page fade-in">
       <div className="page-header">
@@ -65,9 +94,11 @@ export default function EmployeePayroll() {
               <div>
                 <div style={{ fontSize: 17, fontWeight: 700 }}>{p.monthLabel}</div>
                 <div className="text-sm text-muted">
-                  {p.paidOn
-                    ? `Paid on ${new Date(`${p.paidOn}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`
-                    : 'Payment pending'}
+                  {p.status === 'paid'
+                    ? `Paid in full on ${payDate(p.paidOn)}`
+                    : p.status === 'partial'
+                      ? `${formatINR(p.paidTotal)} paid · ${formatINR(p.remaining)} outstanding`
+                      : 'Payment pending'}
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-md)' }}>
@@ -118,6 +149,49 @@ export default function EmployeePayroll() {
                   </div>
                 </div>
               </div>
+            </div>
+
+            {/* The payment history for the month. Present even when nothing has
+                been paid, so the shape of the section does not change month to
+                month as the office records instalments. */}
+            <div style={{ marginTop: 'var(--sp-lg)' }}>
+              <div className="section-title" style={{ fontSize: 13 }}>Payments</div>
+              <div className="card" style={{ padding: 'var(--sp-md)' }}>
+                <div className="payroll-row">
+                  <span>Paid so far</span>
+                  <span>{formatINR(p.paidTotal)}</span>
+                </div>
+                {p.remaining < 0 ? (
+                  <div className="payroll-row total">
+                    <span>Overpaid by</span>
+                    <span className="payroll-deduction">− {formatINR(p.overpaidBy)}</span>
+                  </div>
+                ) : (
+                  <div className="payroll-row total">
+                    <span>Balance remaining</span>
+                    <span>{formatINR(p.remaining)}</span>
+                  </div>
+                )}
+              </div>
+
+              {p.payments.length > 0 && (
+                <div className="table-wrapper" style={{ marginTop: 'var(--sp-sm)' }}>
+                  <table>
+                    <thead>
+                      <tr><th>Date</th><th>Amount</th><th>Note</th></tr>
+                    </thead>
+                    <tbody>
+                      {p.payments.map((x) => (
+                        <tr key={x.id}>
+                          <td>{payDate(x.paidOn)}</td>
+                          <td>{formatINR(x.amount)}</td>
+                          <td>{x.note || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         ))

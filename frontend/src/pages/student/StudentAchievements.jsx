@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Trophy, GraduationCap, Medal } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
+import LoadErrorState from '../../components/LoadErrorState';
+import { useLoadState } from '../../utils/useLoadState';
 
 /** Icon + color per achievement type */
 const TYPE_META = {
@@ -17,16 +19,34 @@ const TYPE_META = {
 export default function StudentAchievements() {
   const { user } = useAuth();
   const [achievements, setAchievements] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { loading, setLoading, error, reloadKey, retry, fail } = useLoadState();
 
   useEffect(() => {
+    // No linked student means there is nothing to ask for, and deliberately NOT
+    // releasing the spinner here: falling through would render the empty state
+    // below, which is a claim about the register we never actually queried.
     if (!user?.linkedEntityId) return;
     api.get(`/students/${user.linkedEntityId}/achievements`)
       .then((r) => setAchievements(r.data.data || []))
+      .catch(fail)
       .finally(() => setLoading(false));
-  }, [user]);
+  }, [user, reloadKey, fail, setLoading]);
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
+
+  // A failed request is not "no achievements yet" — the two are told apart
+  // before the empty state below can ever be reached.
+  if (error) {
+    return (
+      <LoadErrorState
+        title="Achievements"
+        subtitle="Awards, certificates & accomplishments"
+        detail={error}
+        onRetry={retry}
+        icon={Trophy}
+      />
+    );
+  }
 
   return (
     <div className="page fade-in">

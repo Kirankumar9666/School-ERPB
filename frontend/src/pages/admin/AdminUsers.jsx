@@ -4,9 +4,9 @@ import api from '../../services/api';
 import { loadOptions } from '../../services/options';
 import ClassSelect from '../../components/ClassSelect';
 import ResetPasswordModal from '../../components/ResetPasswordModal';
+import LoadErrorState from '../../components/LoadErrorState';
+import { describeLoadError } from '../../utils/useLoadState';
 
-/** '10' + 'A' → 'cls-10A' (same id format the class list uses) */
-const classIdOf = (grade, section) => `cls-${String(grade)}${String(section).toUpperCase()}`;
 
 /** Column headers shared by every account table on this page */
 const ACCOUNT_HEADERS = (
@@ -68,6 +68,12 @@ export default function AdminUsers() {
 
   // Reset-password modal (shared ResetPasswordModal component)
   const [resetting, setResetting] = useState(null); // user being reset
+  // "Create login" for a selected student who has no account yet — the same
+  // one-time provisioning Add Student performs, offered here so a student
+  // admitted before that rule (or whose contact arrived later) can be given
+  // their login without editing anything.
+  const [creatingLogin, setCreatingLogin] = useState(false);
+  const [createLoginError, setCreateLoginError] = useState('');
 
   useEffect(() => {
     Promise.all([
@@ -82,12 +88,14 @@ export default function AdminUsers() {
         setEmployees(e.data.data || []);
         setClasses(o.classes);
       })
-      .catch(() => setLoadError(true))
+      .catch((err) => setLoadError(describeLoadError(err)))
       .finally(() => setLoading(false));
   }, [reloadKey]);
 
-  /** Roster of the selected class, narrowed live by the name/roll-no search */
-  const roster = students.filter((s) => classIdOf(s.class, s.section) === classKey);
+  /** Roster of the selected class, narrowed live by the name/roll-no search.
+   *  Matched on the student's REAL class id: rebuilding it from grade+section
+   *  produces 'cls--2A' for a named level, which matches nothing. */
+  const roster = students.filter((s) => s.classId === classKey);
   const studentTerm = studentQuery.trim().toLowerCase();
   const classStudents = roster.filter((s) => !studentTerm
     || [s.name, s.rollNumber].some((v) => String(v ?? '').toLowerCase().includes(studentTerm)));
@@ -121,6 +129,29 @@ export default function AdminUsers() {
     setResetting(user);
   };
 
+  /**
+   * Provision the missing login for the selected student. The server applies the
+   * same rule Add Student does (username from the name, initial password =
+   * guardian contact, forced change at first login) and refuses when a login
+   * already exists — this button is only rendered when it does not. On success
+   * the account list is re-read so the row appears with its Reset Password
+   * action, exactly as an account created at admission would.
+   */
+  const createLogin = async () => {
+    if (!selectedStudent) return;
+    setCreatingLogin(true);
+    setCreateLoginError('');
+    try {
+      await api.post(`/admin/students/${selectedStudent.id}/create-login`);
+      await load();
+      setSelectedStudentId(''); // back to the roster, so the new row is not stale
+    } catch (err) {
+      setCreateLoginError(err.response?.data?.message || 'Could not create the login.');
+    } finally {
+      setCreatingLogin(false);
+    }
+  };
+
   const clearSelection = () => {
     setSelectedStudentId('');
     setSelectedEmployeeId('');
@@ -151,23 +182,13 @@ export default function AdminUsers() {
 
   if (loadError) {
     return (
-      <div className="page fade-in">
-        <div className="page-header">
-          <div className="page-title">User Accounts</div>
-          <div className="page-subtitle">Reset passwords from here</div>
-        </div>
-        <div className="empty-state">
-          <Users size={40} />
-          Could not load the account, class, student or employee lists. Check that the API is running.
-          <button
-            className="btn btn-primary btn-sm"
-            style={{ marginTop: 'var(--sp-md)' }}
-            onClick={() => { setLoadError(false); setLoading(true); setReloadKey((k) => k + 1); }}
-          >
-            Retry
-          </button>
-        </div>
-      </div>
+      <LoadErrorState
+        title="User Accounts"
+        subtitle="Student, employee and staff accounts • reset passwords from here"
+        detail={loadError}
+        onRetry={() => { setLoadError(false); setLoading(true); setReloadKey((k) => k + 1); }}
+        icon={Users}
+      />
     );
   }
 
@@ -245,6 +266,35 @@ export default function AdminUsers() {
                   <div className="empty-state">
                     <Users size={32} />
                     No account set up for {selectedStudent.name}.
+                    {/* Offered only when it can succeed: the initial password is
+                        the guardian contact, so a student without one has nothing
+                        to derive it from — Edit Student fills that in first. */}
+                    {selectedStudent.guardianContact ? (
+                      <>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          style={{ marginTop: 'var(--sp-md)' }}
+                          onClick={createLogin}
+                          disabled={creatingLogin}
+                        >
+                          <KeyRound size={14} /> {creatingLogin ? 'Creating…' : 'Create login'}
+                        </button>
+                        <div className="text-sm text-muted" style={{ marginTop: 6 }}>
+                          Same rule as a new admission: username from the name, initial
+                          password = the guardian contact, changed at first login.
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-sm text-muted" style={{ marginTop: 6 }}>
+                        A login cannot be created yet — there is no guardian contact on
+                        file, and the initial password is the guardian contact. Add one
+                        with Edit Student first.
+                      </div>
+                    )}
+                    {createLoginError && (
+                      <div className="login-error" style={{ marginTop: 6 }}>{createLoginError}</div>
+                    )}
                   </div>
                 )}
               </>

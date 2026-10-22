@@ -192,11 +192,16 @@ function stopServer(child) {
  * process must refuse to start (exit 1 + the config error) instead of falling
  * back to the insecure development secret. Run from a directory without a
  * .env so dotenv cannot paper over the missing configuration.
+ *
+ * @param {object} [overrides] extra env for the child. Used for the second
+ *   check: a production boot whose JWT_SECRET is a KNOWN dev/test/template value
+ *   must also exit 1 — a secret that is present but published is no better than
+ *   a missing one.
  */
-async function prodFailFastResult() {
-  const env = { ...process.env, NODE_ENV: 'production' };
-  delete env.JWT_SECRET;
-  delete env.JWT_REFRESH_SECRET;
+async function prodFailFastResult(overrides = {}) {
+  const env = { ...process.env, NODE_ENV: 'production', ...overrides };
+  if (!('JWT_SECRET' in overrides)) delete env.JWT_SECRET;
+  if (!('JWT_REFRESH_SECRET' in overrides)) delete env.JWT_REFRESH_SECRET;
 
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [path.join(BACKEND_DIR, 'src', 'server.js')], {
@@ -368,6 +373,19 @@ async function runChecks({ base, root, log, spawned }) {
     expect(code === 1, `exit code ${code} (expected 1)`);
     expect(out.includes('JWT_SECRET is required in production'), `guard message missing, got:\n${out.trim()}`);
     return 'refused to start, clear config error';
+  });
+
+  await check('production fail-fast with a KNOWN dev/test JWT secret → exit 1', async () => {
+    // Present but published: the value is the module's own development fallback,
+    // so booting with it would sign every production session with a secret that
+    // is in this repository. The guard must treat it exactly like a missing one.
+    const { code, out } = await prodFailFastResult({
+      JWT_SECRET: 'dev-only-insecure-jwt-secret-change-me',
+      JWT_REFRESH_SECRET: crypto.randomBytes(48).toString('hex'),
+    });
+    expect(code === 1, `exit code ${code} (expected 1)`);
+    expect(out.includes('known development/test/template value'), `guard message missing, got:\n${out.trim()}`);
+    return 'refused to start, published secret named';
   });
 }
 

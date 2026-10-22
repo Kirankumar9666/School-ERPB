@@ -1,11 +1,18 @@
 import { useEffect, useState } from 'react';
-import { Bell, CalendarClock, Pencil, Send, Trash } from 'lucide-react';
+import { Bell, CalendarClock, Download, Megaphone, Pencil, Send, Target, Trash, Users } from 'lucide-react';
 import api from '../../services/api';
 import { loadOptions, optionLabel } from '../../services/options';
-import toast from 'react-hot-toast';
+import { downloadBlob, filenameFromDisposition } from '../../utils/download';
+import toast from '../../services/toast';
 import Modal from '../../components/Modal';
 import ConfirmModal from '../../components/ConfirmModal';
+import { AnnouncementPdfField } from '../../components/AnnouncementForm';
+import { validateAnnouncement } from '../../utils/announcement';
+import { useSubmitGuard } from '../../utils/useSubmitGuard';
+import AnnouncementTargetDialog from '../../components/AnnouncementTargetDialog';
 import { ROLES } from '../../constants/roles';
+import LoadErrorState from '../../components/LoadErrorState';
+import { useLoadState } from '../../utils/useLoadState';
 
 const ROLES_LIST = Object.values(ROLES);
 
@@ -36,6 +43,19 @@ const scheduleStatus = (a) => {
 };
 
 /**
+ * Who a circular actually went to, from the server's `targetScope`:
+ * the Audience tags for a broad publish, the one class for a targeted class
+ * send, or all employees. Targeted sends are listed here too — a circular sent
+ * to one class is still a circular, and the admin manages every circular from
+ * one screen.
+ */
+const audienceLabel = (a) => {
+  if (a.targetScope === 'CLASS') return a.targetClassLabel || 'one class';
+  if (a.targetScope === 'EMPLOYEES') return 'All employees';
+  return a.targetRoles.join(', ');
+};
+
+/**
  * Admin Announcements — create, schedule, list and delete circulars.
  * Categories are validated server-side (constants/options.js) and served by
  * /school/options; the target-role list comes from the shared ROLES constants.
@@ -49,26 +69,39 @@ const scheduleStatus = (a) => {
 export default function AdminAnnouncements() {
   const [list, setList] = useState([]);
   const [categories, setCategories] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [classOptions, setClassOptions] = useState([]);
+  const [classesLoading, setClassesLoading] = useState(false);
+  const { loading, setLoading, error, reloadKey, retry, fail } = useLoadState();
   const [form, setForm] = useState({
     title: '', body: '', category: '', targetRoles: [ROLES.STUDENT, ROLES.TEACHER],
     showFrom: '', // blank → server defaults to today
     showUntil: '', // required
   });
+  // The picked PDF stays outside `form` (a File is not a form value) and is
+  // sent as multipart alongside the text fields.
+  const [attachment, setAttachment] = useState(null);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState(null); // announcement being rescheduled
   const [editForm, setEditForm] = useState({ showFrom: '', showUntil: '' });
+  // "Send To…" popup
+  const [targetOpen, setTargetOpen] = useState(false);
+  const [targetSending, setTargetSending] = useState(false);
+  // One burst of clicking runs the validation once; `cooling` greys the
+  // buttons while the message is being read. Wrapped around the handlers
+  // below, once they exist.
+  const [guard, cooling] = useSubmitGuard();
 
   const load = () =>
     Promise.all([api.get('/admin/announcements'), loadOptions()]).then(([r, o]) => {
       setList(r.data.data);
       setCategories(o.enums.announcementCategories);
+      setClassOptions(o.classes || []);
       setForm((f) => ({ ...f, category: f.category || o.enums.announcementCategories[0] || '' }));
     });
 
   useEffect(() => {
-    load().finally(() => setLoading(false));
-  }, []);
+    load().catch(fail).finally(() => setLoading(false));
+  }, [reloadKey, fail, setLoading]);
 
   const toggleRole = (role) => {
     const has = form.targetRoles.includes(role);
@@ -78,35 +111,91 @@ export default function AdminAnnouncements() {
     });
   };
 
+  /** Multipart body shared by the broad publish and the targeted send. */
+  const buildPayload = (extra = {}) => {
+    const data = new FormData();
+    data.append('title', form.title.trim());
+    data.append('body', form.body.trim());
+    data.append('category', form.category);
+    data.append('showUntil', form.showUntil);
+    // Omitted when blank — the server makes it visible from today.
+    if (form.showFrom) data.append('showFrom', form.showFrom);
+    if (attachment) data.append('file', attachment);
+    Object.entries(extra).forEach(([k, v]) => { if (v !== undefined) data.append(k, v); });
+    return data;
+  };
+
+  const resetForm = () => {
+    setForm({ title: '', body: '', category: categories[0] || 'general', targetRoles: [ROLES.STUDENT, ROLES.TEACHER], showFrom: '', showUntil: '' });
+    setAttachment(null);
+  };
+
   const handleCreate = async (e) => {
     e.preventDefault();
-    if (!form.title.trim() || form.body.trim().length < 10 || form.targetRoles.length === 0) {
-      toast.error('Title, body (min 10 chars) and at least one audience are required.');
+    if (form.targetRoles.length === 0) {
+      toast.error('Pick at least one audience for a broadcast.');
       return;
     }
-    if (!form.showUntil) {
-      toast.error('"Show until" is required — it is the last day the circular is visible.');
-      return;
-    }
-    if (form.showFrom && form.showFrom > form.showUntil) {
-      toast.error('"Show until" must be on or after "Show from".');
-      return;
-    }
+    const problem = validateAnnouncement(form);
+    if (problem) { toast.error(problem); return; }
+
     setSaving(true);
     try {
-      await api.post('/admin/announcements', {
-        title: form.title.trim(), body: form.body.trim(), category: form.category, targetRoles: form.targetRoles,
-        showUntil: form.showUntil,
-        // Omitted when blank — the server makes it visible from today.
-        ...(form.showFrom ? { showFrom: form.showFrom } : {}),
-      });
+      const data = buildPayload();
+      form.targetRoles.forEach((r) => data.append('targetRoles', r));
+      await api.post('/admin/announcements', data);
       toast.success('Announcement posted!');
-      setForm({ title: '', body: '', category: 'general', targetRoles: [ROLES.STUDENT, ROLES.TEACHER], showFrom: '', showUntil: '' });
+      resetForm();
       await load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Could not post announcement.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  /** Open the "Send To…" popup (the class list is already loaded live). */
+  const openTargetDialog = () => {
+    const problem = validateAnnouncement(form);
+    if (problem) { toast.error(problem); return; }
+    setClassesLoading(false);
+    setTargetOpen(true);
+  };
+
+  // Both action buttons run through the guard, so an empty title raises ONE
+  // "Title is required" message per burst of clicking rather than one per click.
+  const guardedCreate = guard(handleCreate);
+  const guardedOpenTarget = guard(openTargetDialog);
+
+  /**
+   * Confirm step accepted — POST the same text to the one chosen target. The
+   * server resolves the audience from `targetScope`, so the Audience tags above
+   * are deliberately not sent.
+   */
+  const handleTargetedSend = async ({ scope, targetClassId }) => {
+    setTargetSending(true);
+    try {
+      const res = await api.post('/admin/announcements/targeted', buildPayload({ targetScope: scope, targetClassId }));
+      toast.success(res.data.message || 'Announcement sent.');
+      setTargetOpen(false);
+      resetForm();
+      await load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Could not send the announcement.');
+    } finally {
+      setTargetSending(false);
+    }
+  };
+
+  /** Download a circular's PDF attachment (admin may fetch any circular's). */
+  const downloadAttachment = async (a) => {
+    try {
+      const res = await api.get(`/admin/announcements/${a.id}/pdf`, { responseType: 'blob' });
+      const filename = filenameFromDisposition(res.headers?.['content-disposition'])
+        || `${a.title.replace(/[^\x20-\x7E]/g, '').replace(/["\\]/g, '')}.pdf`;
+      downloadBlob(new Blob([res.data], { type: 'application/pdf' }), filename);
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Could not download the attachment.');
     }
   };
 
@@ -163,6 +252,20 @@ export default function AdminAnnouncements() {
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
 
+  // A failed request is not "no announcements yet" — the two are told apart
+  // before the empty state below can ever be reached.
+  if (error) {
+    return (
+      <LoadErrorState
+        title="Announcements"
+        subtitle="Post circulars for students & staff"
+        detail={error}
+        onRetry={retry}
+        icon={Bell}
+      />
+    );
+  }
+
   return (
     <div className="page fade-in">
       <div className="page-header">
@@ -174,7 +277,7 @@ export default function AdminAnnouncements() {
       <div className="section">
         <div className="section-title"><Send size={14} /> New Announcement</div>
         <div className="card">
-          <form onSubmit={handleCreate} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-md)' }}>
+          <form onSubmit={guardedCreate} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-md)' }}>
             <div className="form-grid-2">
               <div className="form-group">
                 <label className="form-label">Title *</label>
@@ -210,7 +313,17 @@ export default function AdminAnnouncements() {
                   </button>
                 ))}
               </div>
+              <div className="text-sm text-muted" style={{ marginTop: 'var(--sp-xs)' }}>
+                These tags apply to <b>Publish Announcement</b> only. “Send To…” below sends to one
+                exact target instead, whatever is selected here.
+              </div>
             </div>
+            <AnnouncementPdfField
+              file={attachment}
+              onChange={setAttachment}
+              onClear={() => setAttachment(null)}
+              disabled={saving || targetSending}
+            />
             <div className="form-grid-2">
               <div className="form-group">
                 <label className="form-label"><CalendarClock size={13} /> Show from (blank = today)</label>
@@ -230,9 +343,20 @@ export default function AdminAnnouncements() {
                 </div>
               </div>
             </div>
-            <button className="btn btn-primary" disabled={saving}>
-              <Bell size={16} /> {saving ? 'Posting...' : 'Publish Announcement'}
-            </button>
+            <div style={{ display: 'flex', gap: 'var(--sp-sm)', flexWrap: 'wrap' }}>
+              <button className="btn btn-primary" disabled={saving || targetSending || cooling}>
+                <Bell size={16} /> {saving ? 'Posting...' : 'Publish Announcement'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={guardedOpenTarget}
+                disabled={saving || targetSending || cooling}
+                title="Send this same announcement to one exact target instead of the audience tags"
+              >
+                <Target size={16} /> Send To…
+              </button>
+            </div>
           </form>
         </div>
       </div>
@@ -252,10 +376,28 @@ export default function AdminAnnouncements() {
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 15, fontWeight: 700 }}>{a.title}</div>
                       <div className="text-sm text-muted">
-                        {a.category} · {new Date(a.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })} · For: {a.targetRoles.join(', ')}
+                        {a.category} · {new Date(a.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })} · For: {audienceLabel(a)}
                       </div>
                       <div className="text-sm" style={{ marginTop: 'var(--sp-xs)', fontWeight: 600 }}>
                         Visible: {fmtDay(a.showFrom)} → {fmtDay(a.showUntil)}
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--sp-sm)', marginTop: 'var(--sp-sm)' }}>
+                        {a.targetScope !== 'ROLES' && (
+                          <span className="badge">
+                            {a.targetScope === 'CLASS' ? <Users size={12} /> : <Megaphone size={12} />} Targeted
+                          </span>
+                        )}
+                        {a.isTeacherPush && <span className="badge">From: {a.authorName || 'a teacher'}</span>}
+                        {a.hasAttachment && (
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => downloadAttachment(a)}
+                            title={a.attachmentName || 'Download the attached PDF'}
+                          >
+                            <Download size={14} /> {a.attachmentName || 'Attachment'}
+                          </button>
+                        )}
                       </div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-sm)', flexShrink: 0 }}>
@@ -302,6 +444,20 @@ export default function AdminAnnouncements() {
           </form>
         </Modal>
       )}
+
+      {/* "Send To…" — targeted send: one class or all employees, with a
+          confirm step. The class list is the live /school/options list, so it
+          is never a hardcoded set of classes. */}
+      <AnnouncementTargetDialog
+        open={targetOpen}
+        title={form.title.trim()}
+        classOptions={classOptions}
+        classesLoading={classesLoading}
+        allowEmployees
+        sending={targetSending}
+        onClose={() => setTargetOpen(false)}
+        onConfirm={handleTargetedSend}
+      />
 
       {confirm && (
         <ConfirmModal

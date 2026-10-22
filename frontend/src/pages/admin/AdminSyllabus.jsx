@@ -5,7 +5,9 @@ import api from '../../services/api';
 import { loadOptions } from '../../services/options';
 import { classChoices } from '../../utils/classes';
 import ClassSelect from '../../components/ClassSelect';
-import toast from 'react-hot-toast';
+import LoadErrorState from '../../components/LoadErrorState';
+import { describeLoadError } from '../../utils/useLoadState';
+import toast from '../../services/toast';
 
 const EMPTY = { subject: '', topics: '' };
 
@@ -80,7 +82,7 @@ export default function AdminSyllabus() {
         // Prefer a class that already has entries, else the first real class
         setClassKey((current) => current || Object.keys(data)[0] || o.classes[0]?.id || '');
       })
-      .catch(() => setLoadError(true))
+      .catch((err) => setLoadError(describeLoadError(err)))
       .finally(() => setLoading(false));
   }, [reloadKey]);
 
@@ -157,23 +159,13 @@ export default function AdminSyllabus() {
 
   if (loadError) {
     return (
-      <div className="page fade-in">
-        <div className="page-header">
-          <div className="page-title">Syllabus Management</div>
-          <div className="page-subtitle">Upload and track syllabus coverage per class</div>
-        </div>
-        <div className="empty-state">
-          <BookMarked size={40} />
-          Could not load the class list or syllabus. Check that the API is running.
-          <button
-            className="btn btn-primary btn-sm"
-            style={{ marginTop: 'var(--sp-md)' }}
-            onClick={() => { setLoadError(false); setLoading(true); setReloadKey((k) => k + 1); }}
-          >
-            Retry
-          </button>
-        </div>
-      </div>
+      <LoadErrorState
+        title="Syllabus Management"
+        subtitle="Upload and track syllabus coverage per class"
+        detail={loadError}
+        onRetry={() => { setLoadError(false); setLoading(true); setReloadKey((k) => k + 1); }}
+        icon={BookMarked}
+      />
     );
   }
 

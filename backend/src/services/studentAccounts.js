@@ -21,13 +21,22 @@ const { ROLES } = require('../constants/roles');
  *
  * PASSWORD TRADE-OFF (deliberate, not an oversight): the initial password is
  * the guardian contact — a value several people may know and that siblings
- * can share. A forced change on first login would need a schema flag, a
- * self-service change endpoint and portal interception; for this system the
- * accepted trade-off is that the admin resets the password from User
- * Accounts (PUT /admin/users/:id/reset-password) after handing over the
- * login. The UI states the initial password's source wherever the username
- * is shown (Student Profile → Login Account, and the add/bulk confirmations),
- * so this stays a visible, chosen policy.
+ * can share. Keeping it as the default is a usability choice: it is the one
+ * credential the school can state without inventing or printing a secret.
+ *
+ * What is NOT accepted is that it stays usable. Every account created here is
+ * flagged `mustChangePassword`, which blocks the user from every business
+ * endpoint (middleware/passwordGate.middleware.js) until they set their own
+ * password through POST /auth/change-password — which also refuses to accept
+ * the guardian contact as the replacement. So the predictable default is valid
+ * only for the window between admission and the student's first login.
+ *
+ * The password itself is never sent to any client: the profile/list responses
+ * carry `username` and `guardianContact` (a contact field), never a password
+ * field. The derivation rule is stated exactly once, in the response of the
+ * create request that produced the account — the one moment an admin needs it
+ * to hand the login over. After that it cannot be retrieved; a forgotten
+ * password is reset from User Accounts, not read back.
  */
 
 /** 'Sneha Reddy' → 'sneha.reddy' — lowercase, non-alphanumeric runs → dots */
@@ -79,6 +88,10 @@ const createStudentAccount = async (student, { taken = new Set() } = {}) => {
           role: ROLES.STUDENT,
           name: student.name,
           status: 'active',
+          // The password here is a value the school chose (the guardian
+          // contact), not one the user chose — so the account may log in but
+          // cannot reach any business endpoint until they set their own.
+          mustChangePassword: true,
         },
       });
       await prisma.student.update({

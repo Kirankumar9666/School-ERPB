@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { FileText, Download, Info } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
+import LoadErrorState from '../../components/LoadErrorState';
+import { useLoadState } from '../../utils/useLoadState';
 import { downloadTextFile } from '../../utils/download';
 
 /**
@@ -10,14 +12,15 @@ import { downloadTextFile } from '../../utils/download';
 export default function EmployeeDocuments() {
   const { user } = useAuth();
   const [docs, setDocs] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { loading, setLoading, error, reloadKey, retry, fail } = useLoadState();
 
   useEffect(() => {
     if (!user?.linkedEntityId) return;
     api.get(`/employees/${user.linkedEntityId}/documents`)
       .then((r) => setDocs(r.data.data || []))
+      .catch(fail)
       .finally(() => setLoading(false));
-  }, [user]);
+  }, [user, reloadKey, fail, setLoading]);
 
   const downloadDoc = (doc) => {
     const content = [
@@ -34,6 +37,18 @@ export default function EmployeeDocuments() {
   };
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
+
+  if (error) {
+    return (
+      <LoadErrorState
+        title="My Documents"
+        subtitle="Appointment, ID, salary slips & certificates"
+        detail={error}
+        onRetry={retry}
+        icon={FileText}
+      />
+    );
+  }
 
   return (
     <div className="page fade-in">

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { KeyRound } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../services/toast';
 import Modal from './Modal';
 import api from '../services/api';
 

@@ -6,7 +6,9 @@ import { classChoices } from '../../utils/classes';
 import ClassSelect from '../../components/ClassSelect';
 import Modal from '../../components/Modal';
 import ConfirmModal from '../../components/ConfirmModal';
-import toast from 'react-hot-toast';
+import LoadErrorState from '../../components/LoadErrorState';
+import { describeLoadError } from '../../utils/useLoadState';
+import toast from '../../services/toast';
 
 /** 'HH:MM' → minutes since midnight (null when malformed) */
 const toMinutes = (t) => {
@@ -75,7 +77,7 @@ export default function AdminTimetable() {
         // Prefer a class that already has periods, else the first real class
         setClassKey((current) => current || Object.keys(data)[0] || o.classes[0]?.id || '');
       })
-      .catch(() => setLoadError(true))
+      .catch((err) => setLoadError(describeLoadError(err)))
       .finally(() => setLoading(false));
   }, [reloadKey]);
 
@@ -207,23 +209,13 @@ export default function AdminTimetable() {
 
   if (loadError) {
     return (
-      <div className="page fade-in">
-        <div className="page-header">
-          <div className="page-title">Timetable Editor</div>
-          <div className="page-subtitle">Add and manage class schedules</div>
-        </div>
-        <div className="empty-state">
-          <Clock size={40} />
-          Could not load the class list or timetable. Check that the API is running.
-          <button
-            className="btn btn-primary btn-sm"
-            style={{ marginTop: 'var(--sp-md)' }}
-            onClick={() => { setLoadError(false); setLoading(true); setReloadKey((k) => k + 1); }}
-          >
-            Retry
-          </button>
-        </div>
-      </div>
+      <LoadErrorState
+        title="Timetable Editor"
+        subtitle="Add and manage class schedules"
+        detail={loadError}
+        onRetry={() => { setLoadError(false); setLoading(true); setReloadKey((k) => k + 1); }}
+        icon={Clock}
+      />
     );
   }
 

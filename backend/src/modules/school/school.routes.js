@@ -1,6 +1,7 @@
 const express = require('express');
 const { z } = require('zod');
 const authMiddleware = require('../../middleware/auth.middleware');
+const requirePasswordChange = require('../../middleware/passwordGate.middleware');
 const { requireRole } = require('../../middleware/role.middleware');
 const { ROLES, EMPLOYEE_ROLES } = require('../../constants/roles');
 const { sendSuccess, sendError, sendValidationError } = require('../../utils/response');
@@ -8,25 +9,48 @@ const prisma = require('../../services/prisma');
 const cache = require('../../utils/cache');
 const { toDateStr, monthRange, schoolToday } = require('../../services/mappers');
 const { enumOptions, classOptions } = require('../../services/options');
+const { listLevels } = require('../../services/classes');
+const fees = require('../../services/fees');
+const { getWeeklyOffDays } = require('../../services/settings');
+const { wrapAsync } = require('../../utils/asyncRoute');
 
-const router = express.Router();
+const router = wrapAsync(express.Router());
 router.use(authMiddleware);
+// Same gate as the other business routers — the school/portal reads are part
+// of the app a forced-change account must not reach yet.
+router.use(requirePasswordChange);
 
 const newId = (prefix) => `${prefix}-${Date.now()}`;
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD');
 
+const {
+  announcementRecipients,
+  assertCanRead,
+  announcementListSelect,
+  mapAnnouncementPublic,
+  sendAnnouncementPdf,
+  viewerIdentity,
+  AnnouncementError,
+} = require('../../services/announcements');
+
 /**
  * GET /api/v1/school/announcements
- * Filters announcements by the requesting user's role AND the show window:
- * a circular is only returned while today — the school's real current date,
- * recomputed on every request — falls inside [showFrom, showUntil] (both
- * inclusive). Once showUntil has passed the circular disappears from every
- * portal on its own; nothing needs to be deleted or hidden manually.
+ * The recipient's own feed, filtered two ways:
+ *
+ *  1. Show window — a circular appears only while today (the school's real
+ *     current date, recomputed on every request) is inside [showFrom,
+ *     showUntil]. Once showUntil has passed it disappears from every portal on
+ *     its own; nothing needs deleting or hiding manually.
+ *  2. Audience — a targeted circular (one class, or all employees) only goes
+ *     to its own audience. The rule is server-side in services/announcements.js
+ *     and is applied to the whole result set here, so a client that asks for
+ *     somebody else's circular simply does not receive it.
+ *
  * Newest first: by showFrom, then posted date.
  */
 router.get('/announcements', async (req, res) => {
   const rows = await prisma.announcement.findMany({
-    where: { targetRoles: { has: req.user.role } },
+    select: announcementListSelect,
     orderBy: [{ showFrom: 'desc' }, { createdAt: 'desc' }],
   });
 
@@ -34,16 +58,30 @@ router.get('/announcements', async (req, res) => {
   // few; the DB session timezone can't shift a DATE column, so comparing the
   // 'YYYY-MM-DD' strings is exact and TZ-proof).
   const today = schoolToday();
-  const visible = rows.filter((a) => toDateStr(a.showFrom) <= today && toDateStr(a.showUntil) >= today);
+  const inWindow = rows.filter((a) => toDateStr(a.showFrom) <= today && toDateStr(a.showUntil) >= today);
 
-  return sendSuccess(res, visible.map((a) => ({
-    id: a.id,
-    title: a.title,
-    body: a.body,
-    targetRoles: a.targetRoles,
-    createdAt: a.createdAt.toISOString(),
-    category: a.category,
-  })));
+  const viewer = await viewerIdentity(req.user);
+  const mine = announcementRecipients(inWindow, viewer);
+
+  return sendSuccess(res, mine.map(mapAnnouncementPublic));
+});
+
+/**
+ * GET /api/v1/school/announcements/:annId/pdf
+ * Download a circular's PDF attachment. The same audience check as the feed
+ * applies to the file, so a targeted circular's attachment is a plain 404 for
+ * anyone outside its audience rather than a live download link.
+ */
+router.get('/announcements/:annId/pdf', async (req, res) => {
+  try {
+    const row = await prisma.announcement.findUnique({ where: { id: req.params.annId } });
+    const viewer = await viewerIdentity(req.user);
+    assertCanRead(row, viewer);
+    return sendAnnouncementPdf(res, row);
+  } catch (err) {
+    if (err instanceof AnnouncementError) return sendError(res, err.message, err.status, err.code);
+    throw err;
+  }
 });
 
 /* ---------- Reminders (private, per signed-in user) ---------- */
@@ -108,17 +146,42 @@ router.get('/holidays', async (req, res) => {
 });
 
 /**
+ * GET /api/v1/school/settings — school-level configuration any signed-in user
+ * needs to render their own screens. Today the only setting is the weekly off
+ * days, which every attendance calendar reads so no screen can hardcode a
+ * weekend. Default: Sunday only.
+ */
+router.get('/settings', async (req, res) => {
+  const weeklyOffDays = await getWeeklyOffDays();
+  return sendSuccess(res, { weeklyOffDays });
+});
+
+/**
  * GET /api/v1/school/options — reference data that fills the UI selects.
  *
  * `enums` is derived from the Prisma schema enums (plus the two zod-validated
  * lists in constants/options.js), so no screen keeps its own copy of a domain
  * list. `classes` is read from the classes table — returned to the roles that
  * manage admissions, timetables and syllabus (admin + employees) only.
+ *
+ * `levels` is the grade-level list (Nursery, LKG, UKG, 1, …, 10) — data rows the
+ * admin adds to, never constants in code. It is served alongside the classes so
+ * the level selector and the class selector can never disagree about what the
+ * school teaches.
  */
 router.get('/options', async (req, res) => {
   const managesClasses = req.user.role === ROLES.ADMIN || EMPLOYEE_ROLES.includes(req.user.role);
-  const classes = managesClasses ? await classOptions() : [];
-  return sendSuccess(res, { enums: enumOptions(), classes });
+  const [classes, levels, weeklyOffDays] = await Promise.all([
+    managesClasses ? classOptions() : [],
+    listLevels(),
+    getWeeklyOffDays(),
+  ]);
+  return sendSuccess(res, {
+    enums: enumOptions(),
+    classes,
+    levels: levels.map((l) => ({ id: l.id, name: l.name, order: l.order })),
+    weeklyOffDays,
+  });
 });
 
 /**
@@ -130,10 +193,12 @@ router.get('/summary', requireRole([ROLES.ADMIN]), async (req, res) => {
   const cached = cache.get('summary:school');
   if (cached) return sendSuccess(res, cached);
 
-  const [totalStudents, totalEmployees, feeAgg, totalAnnouncements, totalHolidays] = await Promise.all([
+  const [totalStudents, totalEmployees, totalFeeDues, totalAnnouncements, totalHolidays] = await Promise.all([
     prisma.student.count(),
     prisma.employee.count(),
-    prisma.student.aggregate({ _sum: { feeDues: true } }),
+    // Every year's outstanding balance, so the dashboard card includes
+    // carried-forward dues from previous classes, not just this year's.
+    fees.totalOutstanding(prisma),
     prisma.announcement.count(),
     prisma.holiday.count(),
   ]);
@@ -141,7 +206,7 @@ router.get('/summary', requireRole([ROLES.ADMIN]), async (req, res) => {
   const summary = {
     totalStudents,
     totalEmployees,
-    totalFeeDues: feeAgg._sum.feeDues || 0,
+    totalFeeDues,
     totalAnnouncements,
     totalHolidays,
   };

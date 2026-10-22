@@ -22,3 +22,6 @@ build/
 # Logs
 *.log
 npm-debug.log*
+# Dev database snapshots - real school data, never commit
+backend/prisma/snapshots/
+backend/tmp_*.js

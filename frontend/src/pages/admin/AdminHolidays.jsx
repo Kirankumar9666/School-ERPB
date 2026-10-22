@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react';
 import { PartyPopper, Plus, Trash } from 'lucide-react';
 import api from '../../services/api';
-import toast from 'react-hot-toast';
+import toast from '../../services/toast';
 import ConfirmModal from '../../components/ConfirmModal';
+import LoadErrorState from '../../components/LoadErrorState';
+import { useLoadState } from '../../utils/useLoadState';
 
 /**
  * Admin Holidays — add and manage school holiday calendar.
  */
 export default function AdminHolidays() {
   const [holidays, setHolidays] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { loading, setLoading, error, reloadKey, retry, fail } = useLoadState();
   const [name, setName] = useState('');
   const [date, setDate] = useState('');
   const [saving, setSaving] = useState(false);
@@ -19,8 +21,8 @@ export default function AdminHolidays() {
   const load = () => api.get('/admin/holidays').then((r) => setHolidays(r.data.data));
 
   useEffect(() => {
-    load().finally(() => setLoading(false));
-  }, []);
+    load().catch(fail).finally(() => setLoading(false));
+  }, [reloadKey, fail, setLoading]);
 
   const handleAdd = async (e) => {
     e.preventDefault();
@@ -60,6 +62,20 @@ export default function AdminHolidays() {
   };
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
+
+  // A failed request is not "no holidays yet" — the two are told apart before
+  // the empty state below can ever be reached.
+  if (error) {
+    return (
+      <LoadErrorState
+        title="Holiday Management"
+        subtitle="Holidays scheduled"
+        detail={error}
+        onRetry={retry}
+        icon={PartyPopper}
+      />
+    );
+  }
 
   const sorted = [...holidays].sort((a, b) => (a.date < b.date ? -1 : 1));
 

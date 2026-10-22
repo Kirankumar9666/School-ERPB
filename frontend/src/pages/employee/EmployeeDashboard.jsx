@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 import { initials } from '../../utils/date';
-import { CalendarDays, Umbrella, DollarSign, Clock, BookMarked, Bell, FileText, Briefcase } from 'lucide-react';
+import { CalendarDays, Umbrella, DollarSign, Clock, Bell, FileText, Briefcase } from 'lucide-react';
 
 /** Quick-access shortcuts */
 const SHORTCUTS = [
@@ -12,7 +12,11 @@ const SHORTCUTS = [
   { to: '/employee/leave',        icon: <Umbrella size={22} />,             label: 'Leave',            sub: 'Apply & track' },
   { to: '/employee/payroll',      icon: <DollarSign size={22} />,           label: 'Payroll',          sub: 'Salary details' },
   { to: '/employee/timetable',    icon: <Clock size={22} />,                label: 'Timetable',        sub: 'Teaching schedule' },
-  { to: '/employee/classes',      icon: <BookMarked size={22} />,           label: 'My Classes',       sub: 'Assigned classes' },
+  // "My Classes" / "Assigned classes" was removed (2026-09-29) along with its
+  // page. `.overview-grid` is `repeat(auto-fill, minmax(240px, 1fr))`, so
+  // dropping one of eight cards reflows the remaining seven automatically —
+  // the grid is width-driven, not a fixed column count, so there is no orphaned
+  // row or gap to compensate for.
   { to: '/employee/announcements',icon: <Bell size={22} />,                 label: 'Announcements',    sub: 'School updates' },
   { to: '/employee/documents',    icon: <FileText size={22} />,             label: 'Documents',        sub: 'Files & records' },
 ];

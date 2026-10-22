@@ -125,4 +125,107 @@ test('apply leave: employee cannot apply for someone else → 403', async () => 
   assert.equal(res.status, 403);
 });
 
+/**
+ * The reason is multi-line free text. These tests pin the storage contract the
+ * Employee Portal's clamped cell and the Admin Panel's "Leave Reason" popup both
+ * depend on: the author's line breaks must survive the round trip, or the 2-line
+ * clamp collapses the text into one flowing paragraph and no "View more" link is
+ * ever offered for a reason that genuinely needs one.
+ */
+test('apply leave: multi-line reason keeps its line breaks verbatim', async () => {
+  // 4 short lines + a blank line + indentation — the exact shape that used to
+  // arrive as a single paragraph.
+  const reason = 'Fever since yesterday\n\n  Doctor advised rest\nTaking medicine';
+  const res = await request(ctx.base, '/employees/emp-001/leaves/apply', {
+    method: 'POST',
+    token: teacher.accessToken,
+    body: { type: 'sick', fromDate: '2026-12-05', toDate: '2026-12-06', reason },
+  });
+  assert.equal(res.status, 201);
+  assert.equal(res.body.data.reason, reason, 'every newline, blank line and indent survives');
+
+  // Re-read through the list endpoint, not just the create response: the admin
+  // panel and the employee's own history both read it from here.
+  const list = await request(ctx.base, '/employees/emp-001/leaves', { token: teacher.accessToken });
+  const stored = list.body.data.history.find((l) => l.id === res.body.data.id);
+  assert.equal(stored.reason, reason, 'the reason read back is byte-identical');
+  assert.equal(stored.reason.split('\n').length, 4, 'still 4 lines, not 1');
+  assert.equal(stored.reason.includes('\r'), false, 'no stray carriage returns stored');
+});
+
+test('apply leave: CRLF and lone CR normalise to LF, ends trimmed, interior kept', async () => {
+  const res = await request(ctx.base, '/employees/emp-001/leaves/apply', {
+    method: 'POST',
+    token: teacher.accessToken,
+    body: {
+      type: 'casual',
+      fromDate: '2026-12-08',
+      toDate: '2026-12-09',
+      // A Windows textarea submits CRLF; a lone CR must not survive either.
+      reason: '\n  Line one\r\nLine two\rLine three\r\n\r\nLine four  \n\n',
+    },
+  });
+  assert.equal(res.status, 201);
+  assert.equal(
+    res.body.data.reason,
+    'Line one\nLine two\nLine three\n\nLine four',
+    'CRLF/CR → LF, only the outer whitespace trimmed, the interior blank line kept',
+  );
+});
+
+test('apply leave: the 500 limit is measured on the normalised text, not the raw one', async () => {
+  // 6 lines of 82 'x' separated by CRLF: 492 content + 5 newlines = 497
+  // normalised (accepted), but 502 raw characters. Validating the RAW string
+  // would reject this while the client's counter — which counts the normalised
+  // value — still showed it within the limit, so the two would disagree.
+  const line = 'x'.repeat(82);
+  const within = [line, line, line, line, line, line].join('\r\n');
+  assert.equal(within.length, 502, 'raw payload is over 500 (CRLF)');
+  const ok = await request(ctx.base, '/employees/emp-001/leaves/apply', {
+    method: 'POST',
+    token: teacher.accessToken,
+    body: { type: 'casual', fromDate: '2026-12-11', toDate: '2026-12-12', reason: within },
+  });
+  assert.equal(ok.status, 201, 'normalised length is within 500, so it is accepted');
+  assert.equal(ok.body.data.reason.length, 497, 'stored as LF, so 5 newlines not 10 characters');
+
+  // Normalised to exactly 500 is still accepted (the boundary is inclusive).
+  const exact = `${within}${'y'.repeat(3)}`;
+  assert.equal(exact.replace(/\r\n?/g, '\n').trim().length, 500);
+  const atLimit = await request(ctx.base, '/employees/emp-001/leaves/apply', {
+    method: 'POST',
+    token: teacher.accessToken,
+    body: { type: 'casual', fromDate: '2026-12-17', toDate: '2026-12-18', reason: exact },
+  });
+  assert.equal(atLimit.status, 201, 'exactly 500 normalised characters is accepted');
+
+  // One character over on the normalised text is still rejected.
+  const over = `${exact}\n!`;
+  const bad = await request(ctx.base, '/employees/emp-001/leaves/apply', {
+    method: 'POST',
+    token: teacher.accessToken,
+    body: { type: 'casual', fromDate: '2026-12-13', toDate: '2026-12-14', reason: over },
+  });
+  assert.equal(bad.status, 400);
+  assert.equal(bad.body.code, 'VALIDATION_ERROR');
+  assert.match(JSON.stringify(bad.body.errors), /500/, 'the error names the 500 limit');
+});
+
+test('apply leave: markup in a reason is stored as literal text, not stripped', async () => {
+  // No HTML sanitising on the way in — sanitising would corrupt an honest reason
+  // that merely contains an angle bracket, and would not be the security boundary
+  // anyway. React escapes it at render time, so what is stored is the author's
+  // bytes and what is displayed is text.
+  const reason = '5 < 10 & 10 > 5\n<script>alert(1)<\/script> <img src=x onerror=alert(1)>';
+  const res = await request(ctx.base, '/employees/emp-001/leaves/apply', {
+    method: 'POST',
+    token: teacher.accessToken,
+    body: { type: 'casual', fromDate: '2026-12-15', toDate: '2026-12-16', reason },
+  });
+  assert.equal(res.status, 201);
+  assert.equal(res.body.data.reason, reason, 'stored exactly as typed, markup and all');
+  // It must arrive as a JSON string value, never as a parsed/serialised object.
+  assert.equal(typeof res.body.data.reason, 'string');
+});
+
 test('teardown — stop server', async () => { await stopServer(ctx.server); });

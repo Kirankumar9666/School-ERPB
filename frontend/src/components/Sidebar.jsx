@@ -1,13 +1,23 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { ROLES, EMPLOYEE_ROLES } from '../constants/roles';
+import { ROLES, EMPLOYEE_ROLES, TEACHER_ROLES } from '../constants/roles';
 import {
   LayoutDashboard, User, CalendarDays, BookOpen, ClipboardList,
   Bell, Umbrella, DollarSign, Clock, Users, FileText,
-  LogOut, BookMarked, Trophy, PartyPopper, Upload, KeyRound, FolderUp, Menu
+  LogOut, Trophy, PartyPopper, Upload, KeyRound, FolderUp, Menu,
+  GraduationCap, Banknote,
 } from 'lucide-react';
 
-/** Navigation config per role */
+/**
+ * Navigation config per role.
+ *
+ * An item may carry `roles: [...]` to restrict it to specific roles — the
+ * employee portal shares one config object across teacher, accountant and
+ * librarian, so this is how a teaching-only page (Marks Entry) is offered to
+ * the one role that can actually use it. Items without `roles` are shown to
+ * every role that reaches the config, and a section whose items are all
+ * filtered out is not rendered at all, so no orphan heading is left behind.
+ */
 const NAV_CONFIG = {
   [ROLES.STUDENT]: {
     label: 'Student Portal',
@@ -47,8 +57,25 @@ EMPLOYEE_ROLES.forEach((role) => {
           { to: '/employee/attendance',   icon: <CalendarDays size={16} />,    label: 'Attendance' },
           { to: '/employee/leave',        icon: <Umbrella size={16} />,        label: 'Leave' },
           { to: '/employee/payroll',      icon: <DollarSign size={16} />,      label: 'Payroll' },
+          // Fees are the accountant's own desk as well as the office's. The page
+          // is the same one the admin panel shows (it reads the shared /fees
+          // endpoint), offered here only to the role that can act on it — a
+          // teacher or librarian has no fee responsibilities and gets no link.
+          { to: '/employee/fees',         icon: <Banknote size={16} />,        label: 'Fee Dues', roles: [ROLES.ACCOUNTANT] },
           { to: '/employee/timetable',    icon: <Clock size={16} />,           label: 'Timetable' },
-          { to: '/employee/classes',      icon: <BookMarked size={16} />,      label: 'My Classes' },
+          // Marks Entry writes the same records as the admin panel, but only for
+          // the (class, subject) pairs this teacher holds in their timetable.
+          // Gated to teaching roles here so a librarian/accountant is not offered
+          // a page that can only ever be empty for them.
+          { to: '/employee/marks',        icon: <ClipboardList size={16} />,   label: 'Marks Entry', roles: TEACHER_ROLES },
+          // ("My Classes" sat here until 2026-09-29 and was removed: it listed
+          // teaching assignments that Timetable, the scoped Mark Attendance tab
+          // and Marks Entry already cover, and it was the only nav item whose
+          // page did not work. /employee/classes now redirects to the dashboard
+          // instead of 404ing, so old bookmarks still land somewhere real. It was
+          // deleted from this shared config rather than hidden per-view, so it
+          // disappears from the expanded rail, the icon rail and the mobile
+          // drawer at once.)
         ],
       },
       {
@@ -70,6 +97,8 @@ NAV_CONFIG[ROLES.ADMIN] = {
       items: [
         { to: '/admin',              icon: <LayoutDashboard size={16} />, label: 'Dashboard' },
         { to: '/admin/students',     icon: <Users size={16} />,           label: 'Students' },
+        { to: '/admin/fees',         icon: <Banknote size={16} />,        label: 'Fee Dues' },
+        { to: '/admin/classes',       icon: <GraduationCap size={16} />,   label: 'Class Management' },
         { to: '/admin/employees',    icon: <User size={16} />,            label: 'Employees' },
         { to: '/admin/payroll',      icon: <DollarSign size={16} />,      label: 'Payroll' },
         { to: '/admin/attendance',   icon: <CalendarDays size={16} />,    label: 'Attendance' },
@@ -108,11 +137,11 @@ NAV_CONFIG[ROLES.ADMIN] = {
  *
  * Collapsible icon rail: expanded it shows the logo block, the user profile and
  * icon+label nav items; collapsed it shrinks to a narrow icon-only rail (the
- * labels, brand text and profile text are hidden by CSS). The panel NEVER
- * leaves the screen, so the ☰ toggle pinned top-left above the logo is always
- * reachable — on desktop the expanded panel pushes the content; on small
- * screens it overlays as a dismissable drawer (backdrop + Escape, owned by
- * ProtectedLayout).
+ * labels, brand text and profile text are hidden by CSS). On desktop the panel
+ * never leaves the screen, so the ☰ toggle pinned top-left above the logo is
+ * always reachable. Below that breakpoint "collapsed" takes the whole panel
+ * off-canvas instead — ProtectedLayout then owns a hamburger in the top bar and
+ * a backdrop, and this same ☰ becomes the drawer's close button.
  *
  * @param {object} props
  * @param {boolean} props.sidebarOpen Current state (drives aria-expanded).
@@ -179,25 +208,32 @@ export default function Sidebar({ sidebarOpen, onToggleSidebar, toggleRef, onNav
         </div>
       </div>
 
-      {/* Navigation */}
+      {/* Navigation — items may be restricted to certain roles, and a section
+          left with nothing to show is dropped rather than left as a bare heading */}
       <nav className="sidebar-nav">
-        {config.sections.map((section) => (
-          <div key={section.title}>
-            <div className="nav-section-title">{section.title}</div>
-            {section.items.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.to === '/student' || item.to === '/employee' || item.to === '/admin'}
-                className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
-                onClick={onNavigate}
-              >
-                {item.icon}
-                <span className="nav-label">{item.label}</span>
-              </NavLink>
-            ))}
-          </div>
-        ))}
+        {config.sections.map((section) => {
+          const visible = section.items.filter(
+            (item) => !item.roles || item.roles.includes(user?.role),
+          );
+          if (visible.length === 0) return null;
+          return (
+            <div key={section.title}>
+              <div className="nav-section-title">{section.title}</div>
+              {visible.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.to === '/student' || item.to === '/employee' || item.to === '/admin'}
+                  className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+                  onClick={onNavigate}
+                >
+                  {item.icon}
+                  <span className="nav-label">{item.label}</span>
+                </NavLink>
+              ))}
+            </div>
+          );
+        })}
       </nav>
 
       {/* Footer */}

@@ -56,9 +56,22 @@ services:
       # Request logging: prod default 'warn' = no per-request logs (LOG_LEVEL=debug
       # turns on morgan 'combined' for temporary diagnosis only).
       LOG_LEVEL: ${LOG_LEVEL:-warn}
-      # Global /api/v1 ceiling per client IP — raise for a whole school behind
-      # one NAT IP or for load tests.
+      # How many reverse proxies sit in front of the API. The composed stack has
+      # the frontend's nginx in front of backend, so 1 is correct by default;
+      # add more hops (CDN, load balancer) as the real deployment does. Wrong
+      # values either collapse every user to one IP or let X-Forwarded-For be
+      # spoofed — see DEPLOYMENT.md §2.
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      # General /api/v1 ceiling. Authenticated traffic is keyed per USER
+      # (API_RATE_LIMIT_USER_MAX), anonymous traffic falls back to the per-IP
+      # limit (API_RATE_LIMIT_MAX), so a school on one NAT IP no longer shares
+      # one bucket.
       API_RATE_LIMIT_MAX: ${API_RATE_LIMIT_MAX:-300}
+      API_RATE_LIMIT_USER_MAX: ${API_RATE_LIMIT_USER_MAX:-3000}
+      # Login limiting: per-IP cap + per-account backoff (see DEPLOYMENT.md §2).
+      LOGIN_IP_MAX_ATTEMPTS: ${LOGIN_IP_MAX_ATTEMPTS:-50}
+      LOGIN_ACCOUNT_MAX_FAILURES: ${LOGIN_ACCOUNT_MAX_FAILURES:-10}
+      CHANGE_PASSWORD_MAX_ATTEMPTS: ${CHANGE_PASSWORD_MAX_ATTEMPTS:-5}
     depends_on:
       postgres:
         condition: service_healthy

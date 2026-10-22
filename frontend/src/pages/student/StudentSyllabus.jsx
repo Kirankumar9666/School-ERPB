@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { BookOpen, Check } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
+import LoadErrorState from '../../components/LoadErrorState';
+import { useLoadState } from '../../utils/useLoadState';
 
 /**
  * Derived completion: (done topics / total topics) × 100, rounded — computed
@@ -19,16 +21,29 @@ const percentOf = (topics) =>
 export default function StudentSyllabus() {
   const { user } = useAuth();
   const [syllabus, setSyllabus] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { loading, setLoading, error, reloadKey, retry, fail } = useLoadState();
 
   useEffect(() => {
     if (!user?.linkedEntityId) return;
     api.get(`/students/${user.linkedEntityId}/syllabus`)
       .then((r) => setSyllabus(r.data.data || []))
+      .catch(fail)
       .finally(() => setLoading(false));
-  }, [user]);
+  }, [user, reloadKey, fail, setLoading]);
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
+
+  if (error) {
+    return (
+      <LoadErrorState
+        title="Syllabus"
+        subtitle="Chapter-wise curriculum progress"
+        detail={error}
+        onRetry={retry}
+        icon={BookOpen}
+      />
+    );
+  }
 
   return (
     <div className="page fade-in">

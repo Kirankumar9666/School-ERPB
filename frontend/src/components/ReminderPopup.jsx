@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { BellRing } from 'lucide-react';
-import api from '../services/api';
 import Modal from './Modal';
 import { todayISO } from '../utils/date';
+import { getReminders, subscribeReminders, REMINDERS_TTL_MS } from '../utils/remindersCache';
 
 const DISMISS_KEY = 'reminder-dismissed'; // sessionStorage — dies with the browser session, i.e. at most "for the rest of the day"
 
@@ -32,10 +32,17 @@ export default function ReminderPopup() {
 
   useEffect(() => {
     let alive = true;
-    api.get('/school/reminders')
-      .then((r) => { if (alive) setReminders(r.data.data || []); })
-      .catch(() => { /* a failed read must not block the app — just no popup */ });
-    return () => { alive = false; };
+    /* Read through the shared reminders cache (utils/remindersCache.js): the
+       popup mounts on EVERY page, so fetching directly here meant one
+       /school/reminders request per navigation. The cache serves this list from
+       one fetch per few minutes, and a background timer picks up reminders added
+       in another tab. A failed read must not block the app — just no popup. */
+    getReminders().then((list) => { if (alive) setReminders(list); }).catch(() => {});
+    const unsub = subscribeReminders((list) => { if (alive) setReminders(list); });
+    const timer = setInterval(() => {
+      getReminders({ force: true }).then((list) => { if (alive) setReminders(list); }).catch(() => {});
+    }, REMINDERS_TTL_MS);
+    return () => { alive = false; unsub(); clearInterval(timer); };
   }, []);
 
   const today = todayISO();

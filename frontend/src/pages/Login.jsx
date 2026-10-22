@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, Lock, User, AlertCircle, BookOpen } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { ROLES } from '../constants/roles';
-import toast from 'react-hot-toast';
+import toast from '../services/toast';
 
 /** Login credentials for demo — displayed in UI for easy testing */
 const DEMO_CREDENTIALS = [
@@ -61,7 +61,7 @@ export default function Login() {
   };
 
   return (
-    <div className="login-page">
+    <main className="login-page">
       <div className="login-card">
 
         {/* Logo */}
@@ -70,7 +70,7 @@ export default function Login() {
             <BookOpen size={28} color="#fff" />
           </div>
           <div>
-            <div className="login-title">School ERP</div>
+            <h1 className="login-title">School ERP</h1>
             <div className="login-subtitle">Portal Management System</div>
           </div>
         </div>
@@ -166,6 +166,6 @@ export default function Login() {
         )}
 
       </div>
-    </div>
+    </main>
   );
 }

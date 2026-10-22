@@ -1,0 +1,13 @@
+-- Force a password change on first login.
+--
+-- Student accounts are provisioned with a password derived from the guardian
+-- contact number (services/studentAccounts.js) — a predictable value that must
+-- not stay usable long-term. `mustChangePassword` marks an account that is
+-- still authenticating with that school-chosen password: the user is allowed
+-- to log in (they need to, to change it) but every business endpoint is
+-- refused with PASSWORD_CHANGE_REQUIRED until POST /auth/change-password
+-- clears the flag.
+--
+-- DEFAULT false: seeded accounts, staff accounts and admin password resets all
+-- set a password deliberately, so existing rows are NOT forced to change.
+ALTER TABLE "User" ADD COLUMN "mustChangePassword" BOOLEAN NOT NULL DEFAULT false;

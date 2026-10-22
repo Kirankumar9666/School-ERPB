@@ -1,6 +1,7 @@
 # School ERP API — Backend
 
-Express 4 REST API for the School ERP portal. Mock-data driven (no database yet) with a clean seam for swapping in Supabase.
+Express 4 REST API for the School ERP portal. Live Prisma data over PostgreSQL
+(Supabase in staging/production); the JS mock stores remain only as seed fixtures.
 
 ## Scripts
 
@@ -8,7 +9,10 @@ Express 4 REST API for the School ERP portal. Mock-data driven (no database yet)
 |---|---|
 | `npm start` | Start the API (`src/server.js`) on `PORT` (default 5000) |
 | `npm run dev` | Same, with `nodemon` auto-restart |
-| `npm test` | Run the full test suite (`node --test`) |
+| `npm test` | Run the full test suite (`node --test`) — test database only |
+| `npm run create-admin -- --username <name>` | Create the first admin (prompts for the password). Refuses if an admin exists unless `--force` |
+| `npm run db:seed` | Demo seed — adds fixtures, **refused in production** |
+| `npm run seed:fixture` | Fixture seed (wipes) — **test database only** |
 
 ## Layout
 
@@ -48,11 +52,16 @@ Each integration file boots a fresh app instance on an ephemeral port, logs in r
 
 Copy `.env.example` to `.env`. In production, `JWT_SECRET` and `JWT_REFRESH_SECRET` are required (the process refuses to start without them). Optional `TLS_KEY_PATH`/`TLS_CERT_PATH` enable in-app HTTPS; prefer terminating TLS at a reverse proxy.
 
-## Demo credentials (mock data)
+## Demo credentials (dev/test fixtures only)
 
-| Username | Password | Role |
-|---|---|---|
-| `admin` | `Admin@123` | admin |
-| `teacher` | `Teacher@123` | teacher (emp-001) |
-| `accountant` | `Accounts@123` | accountant (emp-002) |
-| `student` | `Student@123` | student (stu-001) |
+These come from the fixture/demo seed and exist **only** on a seeded
+developer/staging database — never in production (the demo seed refuses
+production, and a production database is created with `npm run create-admin`).
+
+The seeded accounts are `admin`, `teacher`, `accountant` and `student`. Their
+passwords are **not printed here on purpose** — they are well-known demo values
+with no place in a document that might be skimmed next to a real deployment.
+Read them from the single source, `src/mock/users.js`, which holds the bcrypt
+hashes (the fixture login names and roles are listed there too). On a real
+environment no demo account exists at all: create the first admin with
+`npm run create-admin -- --username <name>` (§ Scripts above).

@@ -55,7 +55,10 @@ function MyAttendance() {
 
     Object.entries(records).forEach(([iso, r]) => {
       if (holidayOn[iso]) return; // that day is shown as a holiday, not a working day
-      if (!r?.status) return;
+      // A stored 'holiday' status is the old weekend marker (the app never
+      // writes it); off days now come from the weekly-off setting and real
+      // holidays. Skipping it here never alters the saved row.
+      if (!r?.status || r.status === 'holiday') return;
       const hours = r.workingHours || 0;
       classes[iso] = r.status;
       titles[iso] = `${STATUS_LABELS[r.status] || r.status}${hours ? ` · ${hours} hrs` : ''}`;
@@ -90,13 +93,14 @@ function MyAttendance() {
 }
 /**
  * Mark Attendance — the class-based flow the admin panel uses, rendered inside
- * the employee portal and scoped to the classes THIS teacher is assigned to
- * teach. The list comes from `/employees/:id/attendance/classes`, which is
- * derived live from the teacher's TeachingAssignment rows — never a local list.
+ * the employee portal and scoped to the classes THIS teacher has a period in,
+ * in the timetable. The list comes from `/employees/:id/attendance/classes`,
+ * which is derived live from those periods — never a local list, and never a
+ * second source that could disagree with the Timetable or Marks Entry screens.
  *
  * The scoping is also enforced server-side on every group read and save, so a
- * class the teacher doesn't teach is rejected even if requested directly; this
- * screen only reflects what the server already allows.
+ * class the teacher has no period in is rejected even if requested directly;
+ * this screen only reflects what the server already allows.
  */
 function TeacherMarkAttendance() {
   const { user } = useAuth();

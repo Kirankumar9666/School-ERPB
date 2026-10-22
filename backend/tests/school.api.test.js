@@ -129,7 +129,7 @@ test('reference options are derived from the schema + database, never hardcoded'
   assert.ok(enums.roles.includes('admin') && enums.roles.includes('librarian'));
 
   // Classes + sections are the rows in the classes table, with live headcounts.
-  assert.deepEqual(classes.map((c) => c.id), ['cls-9B', 'cls-10A']); // grade asc
+  assert.deepEqual(classes.map((c) => c.id), ['cls-9B', 'cls-10A']); // level order asc
   const tenA = classes.find((c) => c.id === 'cls-10A');
   assert.equal(tenA.grade, '10');
   assert.equal(tenA.section, 'A');

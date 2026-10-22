@@ -24,6 +24,16 @@ test('attendance enrollment gate: rosters and saves are scoped to enrolledAt', a
   const classId = 'cls-enr-9X';
   const studentId = 'stu-enr-001';
 
+  /* This file reuses fixed ids, so a second run on the same day inherits what
+     the previous run left behind. The seed drops the class and student again
+     (they are not in the mock), but `AttendanceConfirmation` is keyed on the
+     groupKey STRING — there is no FK to Class — so the seed cannot clear it, and
+     a leftover confirmation from an earlier run is already past the 1-hour edit
+     window. That made this run's own save fail with 403 EDIT_LOCKED. Start from
+     an empty slate for this class. */
+  await prisma.attendanceConfirmation.deleteMany({ where: { kind: 'student', groupKey: classId } });
+  await prisma.studentAttendance.deleteMany({ where: { studentId } });
+
   /* A class + one student enrolled TODAY — the same rule the create endpoints
      apply (enrolledAt = the day the student is added). */
   await prisma.class.create({ data: { id: classId, grade: 9, section: 'X' } });
@@ -38,7 +48,7 @@ test('attendance enrollment gate: rosters and saves are scoped to enrolledAt', a
   });
 
   const getGroup = (date) =>
-    request(base, `/admin/attendance/group?${new URLSearchParams({ kind: 'student', groupKey: classId, date })}`, {
+    request(base, `/admin/attendance/group?${new URLSearchParams({ kind: 'student', groupKey: classId, date, session: 'FN' })}`, {
       token: admin.accessToken,
     });
 
@@ -57,7 +67,7 @@ test('attendance enrollment gate: rosters and saves are scoped to enrolledAt', a
       method: 'POST',
       token: admin.accessToken,
       body: {
-        kind: 'student', groupKey: classId, date: before,
+        kind: 'student', groupKey: classId, date: before, session: 'FN',
         entries: [{ entityId: studentId, status: 'present' }],
       },
     });
@@ -67,24 +77,32 @@ test('attendance enrollment gate: rosters and saves are scoped to enrolledAt', a
     assert.equal(rows, 0, 'nothing written for the pre-enrollment date');
   });
 
-  await t.test('bulk save on/after enrollment succeeds', async () => {
+  await t.test('bulk save on/after enrollment succeeds — and only for that session', async () => {
     const res = await request(base, '/admin/attendance/bulk', {
       method: 'POST',
       token: admin.accessToken,
       body: {
-        kind: 'student', groupKey: classId, date: today,
+        kind: 'student', groupKey: classId, date: today, session: 'AN',
         entries: [{ entityId: studentId, status: 'present' }],
       },
     });
     assert.equal(res.status, 201);
     assert.equal(res.body.data.saved, 1);
+
+    // Session-scoped: the FN roster for that day is still empty.
+    const fnRoster = await request(
+      base,
+      `/admin/attendance/group?${new URLSearchParams({ kind: 'student', groupKey: classId, date: today, session: 'FN' })}`,
+      { token: admin.accessToken },
+    );
+    assert.equal(fnRoster.body.data.members[0].status, null, 'FN was not touched by the AN save');
   });
 
   await t.test('single mark refuses a pre-enrollment date', async () => {
     const res = await request(base, '/admin/attendance', {
       method: 'POST',
       token: admin.accessToken,
-      body: { entityType: 'student', entityId: studentId, date: before, status: 'present' },
+      body: { entityType: 'student', entityId: studentId, date: before, session: 'FN', status: 'present' },
     });
     assert.equal(res.status, 400);
     assert.match(res.body.message, /was not enrolled on 2026-09-01/);
@@ -97,7 +115,7 @@ test('attendance enrollment gate: rosters and saves are scoped to enrolledAt', a
     // is cls-10A (10-A), which is where the fixtures live.
     const res = await request(
       base,
-      `/admin/attendance/group?${new URLSearchParams({ kind: 'student', groupKey: 'cls-10A', date: '2026-09-05' })}`,
+      `/admin/attendance/group?${new URLSearchParams({ kind: 'student', groupKey: 'cls-10A', date: '2026-09-05', session: 'FN' })}`,
       { token: admin.accessToken },
     );
     assert.equal(res.status, 200);

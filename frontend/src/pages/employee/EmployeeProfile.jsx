@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { User, Briefcase, Phone, MapPin, Info, IdCard } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
+import LoadErrorState from '../../components/LoadErrorState';
+import { useLoadState } from '../../utils/useLoadState';
 import { initials } from '../../utils/date';
 
 /**
@@ -10,16 +12,29 @@ import { initials } from '../../utils/date';
 export default function EmployeeProfile() {
   const { user } = useAuth();
   const [profile, setProfile] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { loading, setLoading, error, reloadKey, retry, fail } = useLoadState();
 
   useEffect(() => {
     if (!user?.linkedEntityId) return;
     api.get(`/employees/${user.linkedEntityId}/profile`)
       .then((r) => setProfile(r.data.data))
+      .catch(fail)
       .finally(() => setLoading(false));
-  }, [user]);
+  }, [user, reloadKey, fail, setLoading]);
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
+
+  if (error) {
+    return (
+      <LoadErrorState
+        title="My Profile"
+        subtitle="Your employment record"
+        detail={error}
+        onRetry={retry}
+        icon={User}
+      />
+    );
+  }
 
   return (
     <div className="page fade-in">

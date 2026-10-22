@@ -1,16 +1,47 @@
 /**
  * Shared test helpers for the Node built-in test runner.
  * Sets NODE_ENV=test (disables morgan) BEFORE the app/config modules load,
- * re-seeds the database so every test file starts from the same state the
+ * re-seeds the TEST database so every test file starts from the same state the
  * in-memory mock stores used to provide, boots the Express app on an
  * ephemeral port, and provides small fetch utils.
  *
- * NOTE: the per-file re-seed wipes all tables — only ever pointed at a dev
- * database (DATABASE_URL in backend/.env), never production.
+ * ## The tests NEVER touch the app's database
+ *
+ * The seed wipes every table, so the URL is judged by the guard in
+ * src/config/test-env.js before anything is loaded. A `.env.test` pointing at a
+ * database whose name does not carry the "test" marker stops the whole run with
+ * a message and deletes nothing.
  */
 process.env.NODE_ENV = 'test';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { assertSafeToWipe } = require('../src/config/test-env');
+
+/* ---- 1. Load .env.test, and ONLY .env.test ---------------------------------
+   dotenv's default `config()` reads `.env` when nothing overrides it, which would
+   silently pick up the developer's DATABASE_URL. `path` pins it to the test file,
+   and `override: true` keeps a value already in the process environment (CI) on
+   top — so a CI job that exports TEST_DATABASE_URL itself wins. */
+const envTestPath = path.join(__dirname, '..', '.env.test');
+if (fs.existsSync(envTestPath)) {
+  require('dotenv').config({ path: envTestPath, override: true });
+} else {
+  require('dotenv').config({ path: envTestPath, override: true });
+}
+
+/* ---- 2. The database the tests will wipe, judged before anything can delete --- */
+const seedUrl = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
+try {
+  assertSafeToWipe(seedUrl, 'the test suite (tests/helpers.js)');
+} catch (err) {
+  // Not a test database: print the refusal and stop the run. Nothing has been
+  // deleted, and no server has been started, so no test can act on the app's
+  // database.
+  console.error(err.message);
+  process.exit(2);
+}
 
 /** Boot the API on a random port → { app, server, base } */
 async function startServer() {
