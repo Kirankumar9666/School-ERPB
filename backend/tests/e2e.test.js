@@ -35,7 +35,7 @@ test('E2E 2: student daily-view flow — profile → attendance → marks → ti
 
   const attendance = await request(ctx.base, '/students/stu-001/attendance?month=2026-09', { token });
   assert.equal(attendance.status, 200);
-  assert.equal(attendance.body.data.summary.percent, 85.7);
+  assert.equal(attendance.body.data.summary.percent, 87.5);
 
   const marks = await request(ctx.base, '/students/stu-001/marks', { token });
   assert.equal(marks.status, 200);

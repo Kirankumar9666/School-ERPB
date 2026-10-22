@@ -10,25 +10,25 @@ const { MOCK_ATTENDANCE_EMPLOYEE } = require('../src/mock/employees');
 
 test('student month summary matches the mock data (stu-001, 2026-09)', () => {
   const s = summarizeAttendance(MOCK_ATTENDANCE_STUDENT['stu-001']['2026-09']);
-  assert.equal(s.marked, 9);
-  assert.equal(s.present, 6);
+  assert.equal(s.marked, 8);
+  assert.equal(s.present, 7);
   assert.equal(s.absent, 1);
-  assert.equal(s.holiday, 2);
-  assert.equal(s.workingDays, 7);
-  assert.equal(s.attended, 6);
-  assert.equal(s.percent, 85.7); // 6/7 working days, rounded to 1 decimal
+  assert.equal(s.holiday, 0); // weekly off days are the seed's, not the mock's
+  assert.equal(s.workingDays, 8);
+  assert.equal(s.attended, 7);
+  assert.equal(s.percent, 87.5); // 7/8 working days, rounded to 1 decimal
 });
 
 test('employee month summary includes working hours (emp-001, 2026-09)', () => {
   const s = summarizeAttendance(MOCK_ATTENDANCE_EMPLOYEE['emp-001']['2026-09']);
-  assert.equal(s.present, 5);
+  assert.equal(s.present, 6);
   assert.equal(s.late, 1);
   assert.equal(s.absent, 1);
-  assert.equal(s.holiday, 2);
-  assert.equal(s.workingDays, 7);
-  assert.equal(s.attended, 6); // late counts as attended
-  assert.equal(s.hours, 47); // 8+8+7+8+0+0+8+0+8
-  assert.equal(s.percent, 85.7);
+  assert.equal(s.holiday, 0);
+  assert.equal(s.workingDays, 8);
+  assert.equal(s.attended, 7); // late counts as attended
+  assert.equal(s.hours, 55); // 8+8+7+8+8+8+0+8 (the weekly-off marker is not in the mock)
+  assert.equal(s.percent, 87.5);
 });
 
 test('half-day counts as 0.5 attended day', () => {

@@ -45,8 +45,8 @@ test('employee attendance returns records plus summary (hours + percent)', async
   const res = await request(ctx.base, '/employees/emp-001/attendance?month=2026-09', { token: teacher.accessToken });
   assert.equal(res.status, 200);
   assert.equal(res.body.data.records['2026-09-01'].status, 'present');
-  assert.equal(res.body.data.summary.hours, 47);
-  assert.equal(res.body.data.summary.percent, 85.7);
+  assert.equal(res.body.data.summary.hours, 55);
+  assert.equal(res.body.data.summary.percent, 87.5);
 });
 
 test('leaves endpoint returns balance and history', async () => {

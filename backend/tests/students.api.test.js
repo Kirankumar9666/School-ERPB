@@ -55,9 +55,9 @@ test('attendance returns records plus computed summary', async () => {
   const res = await request(ctx.base, '/students/stu-001/attendance?month=2026-09', { token: student.accessToken });
   assert.equal(res.status, 200);
   assert.equal(res.body.data.records['2026-09-01'], 'present');
-  assert.equal(res.body.data.summary.present, 6);
+  assert.equal(res.body.data.summary.present, 7);
   assert.equal(res.body.data.summary.absent, 1);
-  assert.equal(res.body.data.summary.percent, 85.7);
+  assert.equal(res.body.data.summary.percent, 87.5);
 });
 
 test('student cannot read another student attendance → 403', async () => {

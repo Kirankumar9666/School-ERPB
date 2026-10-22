@@ -23,6 +23,8 @@ const { MOCK_USERS } = require('../src/mock/users');
 const { MOCK_STUDENTS, MOCK_ATTENDANCE_STUDENT, MOCK_MARKS, MOCK_ACHIEVEMENTS, MOCK_STUDENT_DOCUMENTS } = require('../src/mock/students');
 const { MOCK_EMPLOYEES, MOCK_ATTENDANCE_EMPLOYEE, MOCK_LEAVES, MOCK_PAYROLL, MOCK_DOCUMENTS } = require('../src/mock/employees');
 const { MOCK_TIMETABLE, MOCK_HOLIDAYS, MOCK_ANNOUNCEMENTS, MOCK_SYLLABUS } = require('../src/mock/school');
+const { DEFAULT_WEEKLY_OFF_DAYS } = require('../src/services/settings');
+const { weekdayOf } = require('../src/utils/attendance');
 
 /*
  * The URL this seed is about to wipe, and the reason it is read BEFORE the client
@@ -47,6 +49,44 @@ const prisma = new PrismaClient({
   },
 });
 const at = (dateStr) => new Date(`${dateStr}T00:00:00.000Z`);
+
+/**
+ * The 'holiday' attendance rows a weekly-off setting implies, for every day of
+ * every seeded month that is one of `weeklyOffDays` — one entry per FN + AN
+ * session, matching the shape the mock stores use. Derived from the setting, so
+ * nothing here names a weekday: a day is closed only because the school's
+ * weekly-off setting says so, and changing that setting changes the fixtures.
+ *
+ * A mock day that already carries a real status is skipped — a recorded class
+ * day is never overwritten by the off-day rule.
+ *
+ * @param {Record<string, Record<string, object>>} mock  MOCK_ATTENDANCE_*
+ * @param {Set<number>} weeklyOffDays JS weekday numbers (0 = Sunday)
+ * @param {boolean} withHours employee shape ({ status, workingHours }) vs plain
+ * @returns {Array<object>} rows ready for createMany
+ */
+const offDayAttendance = (mock, weeklyOffDays, withHours) => {
+  const rows = [];
+  Object.entries(mock).forEach(([entityId, months]) => {
+    Object.values(months).forEach((days) => {
+      const month = Object.keys(days)[0]?.slice(0, 7);
+      if (!month) return;
+      const [y, mo] = month.split('-').map(Number);
+      const lastDay = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+      for (let day = 1; day <= lastDay; day += 1) {
+        const date = `${month}-${String(day).padStart(2, '0')}`;
+        if (days[date]) continue; // a real recorded day is never overwritten
+        if (!weeklyOffDays.has(weekdayOf(date))) continue;
+        ['FN', 'AN'].forEach((session) => {
+          rows.push(withHours
+            ? { employeeId: entityId, date: at(date), session, status: 'holiday', workingHours: 0 }
+            : { studentId: entityId, date: at(date), session, status: 'holiday' });
+        });
+      }
+    });
+  });
+  return rows;
+};
 
 /** 'cls-10A' -> { grade: 10, section: 'A' } (inverse of the mock key format) */
 const parseClassId = (classId) => {
@@ -179,6 +219,12 @@ async function seed(opts = {}) {
   const wipe = opts.wipe !== false;
   return withRetry(async () => {
     if (wipe) await wipeAll(prisma);
+
+    /* The school's weekly-off weekdays — the SAME default the app reads
+       (services/settings.js), so the fixtures can never disagree with the
+       setting about which weekdays are off. Persisted to the Setting table
+       near the end of this function, and used to derive the off-day rows. */
+    const weeklyOffDays = new Set(DEFAULT_WEEKLY_OFF_DAYS);
 
     /* ---- academic years (the spine every class/enrollment/exam hangs off) ---- */
   const years = collectAcademicYears();
@@ -326,7 +372,14 @@ async function seed(opts = {}) {
 
   /* ---- attendance (one FN row + one AN row per mock day; the mock files are
      day-level, and each recorded day applies to both sessions — so FN and AN
-     always agree in the seed data, exactly like the migration's backfill) ---- */
+     always agree in the seed data, exactly like the migration's backfill).
+
+     Weekly-off weekdays are recorded as 'holiday' HERE, from the setting —
+     never typed into the mock stores, which mark ordinary class days only. So
+     a real off day reads as closed while every other weekday (including
+     Saturday, under the default) stays an ordinary working day, and changing
+     the school's working week changes the fixtures with no edit to this file.
+     A mock day that already carries a status is left exactly as written. ---- */
   const studentAttendance = [];
   Object.entries(MOCK_ATTENDANCE_STUDENT).forEach(([studentId, months]) => {
     Object.values(months).forEach((days) => {
@@ -337,6 +390,7 @@ async function seed(opts = {}) {
       });
     });
   });
+  studentAttendance.push(...offDayAttendance(MOCK_ATTENDANCE_STUDENT, weeklyOffDays, false));
   if (studentAttendance.length) await prisma.studentAttendance.createMany({ data: studentAttendance });
 
   // Employee session hours keep the day total: a present day was 8h, so each
@@ -355,6 +409,8 @@ async function seed(opts = {}) {
       });
     });
   });
+  // Weekly-off days for employees too — 'holiday', zero hours, both sessions.
+  employeeAttendance.push(...offDayAttendance(MOCK_ATTENDANCE_EMPLOYEE, weeklyOffDays, true));
   if (employeeAttendance.length) await prisma.employeeAttendance.createMany({ data: employeeAttendance });
 
   /* ---- exams + marks (exams derived from the marks rows themselves) ---- */
@@ -515,8 +571,9 @@ async function seed(opts = {}) {
     });
   }
 
-  /* ---- school settings (weekly off days — Sunday only by default) ---- */
-  await prisma.setting.create({ data: { key: 'weeklyOffDays', value: [0] } });
+  /* ---- school settings (weekly off days — the value derived at the top of
+     this function from the app's own default) ---- */
+  await prisma.setting.create({ data: { key: 'weeklyOffDays', value: [...weeklyOffDays].sort((a, b) => a - b) } });
 
   const achievements = [];
   Object.entries(MOCK_ACHIEVEMENTS).forEach(([studentId, list]) => {

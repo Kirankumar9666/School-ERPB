@@ -135,4 +135,4 @@ const summarizeAttendance = (records, weeklyOffDays = []) => {
   return summary;
 };
 
-module.exports = { summarizeAttendance, mergeDayStatus, buildDayRecords };
+module.exports = { summarizeAttendance, mergeDayStatus, buildDayRecords, weekdayOf };

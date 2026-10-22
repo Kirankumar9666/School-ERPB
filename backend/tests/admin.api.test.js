@@ -219,10 +219,10 @@ test('attendance sessions: FN and AN stored independently; a split day reads as 
   assert.equal(att.body.data.records['2026-09-16'], 'half-day');
 
   // The half-day counts toward the month's working days at 0.5 (weighted):
-  // 6 seeded present + 1 marked on 09-15 + this 0.5 = 7.5 attended days.
+  // 7 seeded present + 1 marked on 09-15 + this 0.5 = 8.5 attended days.
   assert.equal(att.body.data.summary.halfDay, 1);
-  assert.equal(att.body.data.summary.attended, 7.5);
-  assert.equal(att.body.data.summary.percent, 83.3);
+  assert.equal(att.body.data.summary.attended, 8.5);
+  assert.equal(att.body.data.summary.percent, 85);
 });
 
 test('attendance marking: invalid status/date → 400', async () => {
