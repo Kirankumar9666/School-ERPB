@@ -23,13 +23,23 @@ jobs:
     # replaced the in-memory mock stores), so CI provides a throwaway one and
     # applies the same migrations a deploy would. Without the service the job
     # cannot pass — prisma requires DATABASE_URL and DIRECT_URL.
+    #
+    # The database (and user) name MUST contain the word "test". The fixture
+    # seed deletes every table, so it refuses to run against anything that does
+    # not look like the disposable test database (see src/config/test-env.js,
+    # which judges the URL by its database/user name). A CI database simply
+    # named "schoolerp" made the guard — correctly — refuse, which is why the
+    # suite failed here with nothing deleted.
     services:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_USER: schoolerp
-          POSTGRES_PASSWORD: schoolerp
-          POSTGRES_DB: schoolerp
+          # Throwaway credentials, matching the URL below. The "test" in both
+          # names is the marker the safety guard looks for; these values are
+          # never used outside this job and are not a real secret.
+          POSTGRES_USER: schoolerp_test
+          POSTGRES_PASSWORD: schoolerp_test
+          POSTGRES_DB: schoolerp_test
         ports:
           - 5432:5432
         options: >-
@@ -40,8 +50,15 @@ jobs:
     env:
       # Local service container, so both the pooled and the direct URL are the
       # same single-instance connection (schema.prisma reads both).
-      DATABASE_URL: postgresql://schoolerp:schoolerp@localhost:5432/schoolerp
-      DIRECT_URL: postgresql://schoolerp:schoolerp@localhost:5432/schoolerp
+      DATABASE_URL: postgresql://schoolerp_test:schoolerp_test@localhost:5432/schoolerp_test
+      DIRECT_URL: postgresql://schoolerp_test:schoolerp_test@localhost:5432/schoolerp_test
+      # The test suite reads TEST_DATABASE_URL first (tests/helpers.js,
+      # prisma/seed.js, src/services/prisma.js), and CI has no .env.test — that
+      # file is gitignored, so on a runner it simply does not exist. Without
+      # this line the tests would fall back to DATABASE_URL; that is the same
+      # URL here, but setting it explicitly is what the guards and the seed
+      # expect, and it keeps the intent legible.
+      TEST_DATABASE_URL: postgresql://schoolerp_test:schoolerp_test@localhost:5432/schoolerp_test
       # Tests set NODE_ENV=test, so the development fallbacks would apply — CI
       # uses explicit throwaway secrets anyway to keep the run warning-free.
       JWT_SECRET: ci-only-secret-not-used-in-production
@@ -55,6 +72,9 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
+      # Applies the migrations to the CI test database (DIRECT_URL, which
+      # schema.prisma uses for migrate). Running it BEFORE `npm test` means the
+      # schema is present even though this service container starts empty.
       - run: npx prisma migrate deploy
       - run: npm test
       # Boots the API with NODE_ENV=production on a free port against the same
@@ -62,6 +82,8 @@ jobs:
       # secrets, quiet logs, RBAC/scoping, rate-limit headers, /health env.
       # The rehearsal logs in as the seeded admin, so seed explicitly rather than
       # depending on whatever state the last test file happened to leave behind.
+      # `db:seed` (demo-seed → seed.js) honours TEST_DATABASE_URL and asserts the
+      # guard, so it wipes and refills the SAME test database the suite used.
       - run: npm run db:seed
       - run: npm run smoke:staging
 
