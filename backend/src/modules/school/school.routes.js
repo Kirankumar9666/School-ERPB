@@ -13,6 +13,7 @@ const { listLevels } = require('../../services/classes');
 const fees = require('../../services/fees');
 const { getWeeklyOffDays } = require('../../services/settings');
 const { wrapAsync } = require('../../utils/asyncRoute');
+const { dateOnly, parseDateOnly } = require('../../utils/date');
 
 const router = wrapAsync(express.Router());
 router.use(authMiddleware);
@@ -21,7 +22,6 @@ router.use(authMiddleware);
 router.use(requirePasswordChange);
 
 const newId = (prefix) => `${prefix}-${Date.now()}`;
-const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD');
 
 const {
   announcementRecipients,
@@ -93,7 +93,7 @@ router.get('/announcements/:annId/pdf', async (req, res) => {
  * under or delete another user's reminders.
  */
 const reminderSchema = z.object({
-  date: dateStr,
+  date: dateOnly,
   title: z.string().trim().min(1, 'Title is required').max(120, 'Title too long (max 120 chars)'),
 });
 
@@ -114,7 +114,7 @@ router.post('/reminders', async (req, res) => {
   if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
 
   const created = await prisma.reminder.create({
-    data: { id: newId('rem'), userId: req.user.id, date: new Date(`${parsed.data.date}T00:00:00.000Z`), title: parsed.data.title },
+    data: { id: newId('rem'), userId: req.user.id, date: parseDateOnly(parsed.data.date), title: parsed.data.title },
   });
   return sendSuccess(res, mapReminder(created), 'Reminder set', 201);
 });

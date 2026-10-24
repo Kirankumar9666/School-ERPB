@@ -90,6 +90,35 @@ test('reminders: private per-user CRUD', async () => {
   await request(ctx.base, `/school/reminders/${later.body.data.id}`, { method: 'DELETE', token: student.accessToken });
 });
 
+test('reminders: the date must be a real calendar date, not just three numbers', async () => {
+  const post = (date, title) => request(ctx.base, '/school/reminders', {
+    method: 'POST', token: student.accessToken, body: { date, title },
+  });
+
+  // Impossible calendar dates, a non-ISO spelling, and an empty value all fail
+  // at validation. Before this check, the impossible ones passed the shape regex
+  // and became Invalid Date objects that Prisma rejected as a 500.
+  for (const date of ['2026-13-40', '2026-02-30', '13-11-2026', '']) {
+    const res = await post(date, 'Invalid date');
+    assert.equal(res.status, 400, `${JSON.stringify(date)} must be a 400`);
+    assert.equal(res.body.code, 'VALIDATION_ERROR');
+    assert.ok(res.body.errors?.date, 'the field error names date');
+  }
+
+  // A real date still succeeds.
+  const valid = await post('2026-10-02', 'Valid reminder date');
+  assert.equal(valid.status, 201);
+  assert.equal(valid.body.data.date, '2026-10-02');
+
+  // Leap day is real in 2028, so it must still be accepted.
+  const leap = await post('2028-02-29', 'Leap day reminder');
+  assert.equal(leap.status, 201);
+  assert.equal(leap.body.data.date, '2028-02-29');
+
+  await request(ctx.base, `/school/reminders/${valid.body.data.id}`, { method: 'DELETE', token: student.accessToken });
+  await request(ctx.base, `/school/reminders/${leap.body.data.id}`, { method: 'DELETE', token: student.accessToken });
+});
+
 test('holidays: full list and month filter', async () => {
   const all = await request(ctx.base, '/school/holidays', { token: teacher.accessToken });
   assert.equal(all.status, 200);
