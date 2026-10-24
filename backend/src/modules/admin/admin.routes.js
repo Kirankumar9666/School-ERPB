@@ -3035,10 +3035,11 @@ router.post('/attendance', async (req, res) => {
       return sendError(res, `${student.name} was not enrolled on ${date}`, 400, 'VALIDATION_ERROR');
     }
 
+    const recordedAt = new Date();
     await prisma.studentAttendance.upsert({
       where: { studentId_date_session: { studentId: entityId, date: day, session } },
-      update: { status: statusDb },
-      create: { studentId: entityId, date: day, session, status: statusDb },
+      update: { status: statusDb, recordedAt },
+      create: { studentId: entityId, date: day, session, status: statusDb, recordedAt },
     });
   } else {
     const employee = await prisma.employee.findUnique({ where: { id: entityId } });

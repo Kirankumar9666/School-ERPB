@@ -356,6 +356,10 @@ model StudentEnrollment {
   // Set when the row stops being current (promoted out, passed out, transferred).
   // Null while this is their current row.
   endedOn        DateTime?        @db.Date
+  // When the office passed this seat out. NOT `endedOn` (the academic year's
+  // last day) and NOT `updatedAt` (moved by later edits). Null on every other
+  // row and on legacy pass-outs; those keep the old conservative undo rule.
+  passedOutAt    DateTime?
   // The class they were in immediately before this one, kept so a promotion can be
   // read back as "8-A -> 9-A" without reconstructing the whole timeline, and so a
   // row can be traced to the Class Management action that produced it.
@@ -576,6 +580,9 @@ model StudentAttendance {
   date      DateTime           @db.Date
   session   AttendanceSession
   status    AttendanceStatus
+  // When this row was last written. Null for rows that predate the column;
+  // the pass-out undo guard treats those as pre-existing.
+  recordedAt DateTime?         @default(now()) @updatedAt
 
   @@unique([studentId, date, session])
   @@index([date])

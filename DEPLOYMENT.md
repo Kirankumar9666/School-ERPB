@@ -121,6 +121,7 @@ npm run prisma:status      # optional: "Database schema is up to date!"
 - Migrations never run inside the API container: the runtime image is pruned to
   production dependencies and has no `prisma` CLI. If the deploy host cannot
   reach the database directly, run this step from CI with `DIRECT_URL` set.
+- **Apply migrations at deploy time, after taking a snapshot, and never from a machine pointed at the live database by accident.**
 
 ### 3.3 Build and start
 

@@ -1431,14 +1431,16 @@ const passOutClass = async ({ classId }) => prisma.$transaction(async (tx) => {
   }
 
   const passedOut = [];
+  const passedOutAt = new Date();
   for (const { student, seat } of batch) {
     /* The seat ends at the end of the year it was for, not at the end of the year
        the button was pressed — the child sat that class for that whole year, and
-       the calendar is the only thing that knows when it ended. */
+       the calendar is the only thing that knows when it ended. `passedOutAt` is
+       the separate event time the undo guard needs. */
     if (seat) {
       await tx.studentEnrollment.update({
         where: { id: seat.id },
-        data: { status: 'passed_out', endedOn: seat.academicYear.endDate },
+        data: { status: 'passed_out', endedOn: seat.academicYear.endDate, passedOutAt },
       });
     }
     await tx.student.update({
@@ -1487,6 +1489,61 @@ const activityInYear = async (client, { studentIds, yearId, startDate, endDate }
     marks: new Set(marks.map((r) => r.studentId)),
     payments: new Set(payments.map((r) => r.studentFee.studentId)),
   };
+};
+
+/**
+ * Which students have attendance or marks written AFTER their own pass-out.
+ *
+ * `passedOutAt` is the event time, not `endedOn` (the year's last day). Seats
+ * that predate the column have no event time, so they keep the old conservative
+ * rule: any attendance or marks in the year closes the window. That is safer
+ * than guessing from `updatedAt`, which later edits move.
+ */
+const activityAfterPassOut = async (client, { seats, yearId, startDate, endDate }) => {
+  const blocked = new Set();
+
+  const legacy = seats.filter((s) => !s.passedOutAt);
+  if (legacy.length) {
+    const old = await activityInYear(client, {
+      studentIds: legacy.map((s) => s.studentId),
+      yearId,
+      startDate,
+      endDate,
+    });
+    for (const id of old.attendance) blocked.add(id);
+    for (const id of old.marks) blocked.add(id);
+  }
+
+  const dated = seats.filter((s) => s.passedOutAt);
+  if (!dated.length) return blocked;
+
+  const [attendance, marks] = await Promise.all([
+    client.studentAttendance.findMany({
+      where: {
+        date: { gte: startDate, lte: endDate },
+        OR: dated.map((s) => ({ studentId: s.studentId, recordedAt: { gt: s.passedOutAt } })),
+      },
+      select: { studentId: true },
+      distinct: ['studentId'],
+    }),
+    client.marksEntry.findMany({
+      where: {
+        exam: { academicYearId: yearId },
+        OR: dated.map((s) => ({
+          studentId: s.studentId,
+          OR: [
+            { enteredAt: { gt: s.passedOutAt } },
+            { updatedAt: { gt: s.passedOutAt } },
+          ],
+        })),
+      },
+      select: { studentId: true },
+      distinct: ['studentId'],
+    }),
+  ]);
+  for (const row of attendance) blocked.add(row.studentId);
+  for (const row of marks) blocked.add(row.studentId);
+  return blocked;
 };
 
 /**
@@ -1543,6 +1600,12 @@ const classPromotionRoster = async ({ classId }) => {
     startDate: to.startDate,
     endDate: to.endDate,
   });
+  const passedOutActivity = await activityAfterPassOut(prisma, {
+    seats: seats.filter((s) => s.status === 'passed_out'),
+    yearId: from.id,
+    startDate: from.startDate,
+    endDate: from.endDate,
+  });
 
   const students = seats.map((seat) => {
     const student = seat.student;
@@ -1569,9 +1632,11 @@ const classPromotionRoster = async ({ classId }) => {
       }
     }
 
-    const blocked = targetActivity.attendance.has(student.id)
-      || targetActivity.marks.has(student.id)
-      || targetActivity.payments.has(student.id);
+    const blocked = passedOut
+      ? passedOutActivity.has(student.id)
+      : targetActivity.attendance.has(student.id)
+        || targetActivity.marks.has(student.id)
+        || targetActivity.payments.has(student.id);
 
     return {
       studentId: student.id,
@@ -1584,9 +1649,13 @@ const classPromotionRoster = async ({ classId }) => {
       state,
       stateLabel,
       handled,
-      canUndo: handled && state !== 'passed_out' && !blocked,
+      canUndo: handled && !blocked,
       undoBlock: handled && blocked
-        ? 'Attendance, marks or a fee payment exists for the new year'
+        ? (passedOut
+          ? (seat.passedOutAt
+            ? 'Attendance or marks were recorded after the pass-out'
+            : 'Attendance or marks exist for this year')
+          : 'Attendance, marks or a fee payment exists for the new year')
         : null,
     };
   });
@@ -1667,7 +1736,7 @@ const moveStudent = async ({ studentId, action, toAcademicYearId = null, toClass
       if (seat) {
         await tx.studentEnrollment.update({
           where: { id: seat.id },
-          data: { status: 'passed_out', endedOn: from.endDate },
+          data: { status: 'passed_out', endedOn: from.endDate, passedOutAt: new Date() },
         });
       }
       await tx.student.update({ where: { id: studentId }, data: { classId: null, rollNumber: null } });
@@ -1785,21 +1854,23 @@ const undoStudentMove = async ({ studentId }) => prisma.$transaction(async (tx) 
     if (!passed || passed.status !== 'passed_out') {
       throw Object.assign(new Error('This student has not been moved this cycle'), { code: 'NOTHING_TO_UNDO' });
     }
-    const activity = await activityInYear(tx, {
-      studentIds: [studentId],
+    const blocked = await activityAfterPassOut(tx, {
+      seats: [passed],
       yearId: from.id,
       startDate: from.startDate,
       endDate: from.endDate,
     });
-    if (activity.attendance.has(studentId) || activity.marks.has(studentId)) {
+    if (blocked.has(studentId)) {
       throw Object.assign(
-        new Error('Attendance or marks have been recorded since, so this cannot be undone'),
+        new Error(passed.passedOutAt
+          ? 'Attendance or marks were recorded after the pass-out, so this cannot be undone'
+          : 'Attendance or marks exist for this year, so this pass-out cannot be undone'),
         { code: 'UNDO_WINDOW_CLOSED' },
       );
     }
     await tx.studentEnrollment.update({
       where: { id: passed.id },
-      data: { status: 'active', endedOn: null },
+      data: { status: 'active', endedOn: null, passedOutAt: null },
     });
     await tx.student.update({
       where: { id: studentId },
@@ -2154,8 +2225,9 @@ const saveHistoricalRecord = async ({
       },
       // Deliberately NOT overwriting enteredBy/enteredAt: those record the first
       // time this result was filed, and a correction must not rewrite the history of
-      // who entered it. The same split the live marks route makes.
-      update: { maxMarks, obtained },
+      // who entered it. The same split the live marks route makes. updatedBy/
+      // updatedAt are stamped so a post-pass-out correction closes the undo window.
+      update: { maxMarks, obtained, updatedBy: actorUsername || null, updatedAt: new Date() },
     });
     savedMarks.push({ examName: name, subject, maxMarks, obtained });
   }

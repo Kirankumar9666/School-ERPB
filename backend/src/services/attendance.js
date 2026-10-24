@@ -266,7 +266,7 @@ const saveBulkAttendance = async ({ kind, groupKey, date, session, entries, over
         if (!updateGroups.has(key)) updateGroups.set(key, { statusDb, workingHours, ids: [] });
         updateGroups.get(key).ids.push(e.entityId);
       } else if (kind === 'student') {
-        creates.push({ studentId: e.entityId, date: day, session, status: statusDb });
+        creates.push({ studentId: e.entityId, date: day, session, status: statusDb, recordedAt: confirmedAt });
       } else {
         creates.push({
           employeeId: e.entityId,
@@ -287,7 +287,7 @@ const saveBulkAttendance = async ({ kind, groupKey, date, session, entries, over
     for (const mgroup of updateGroups.values()) {
       const data = kind === 'employee'
         ? { status: mgroup.statusDb, workingHours: mgroup.workingHours }
-        : { status: mgroup.statusDb };
+        : { status: mgroup.statusDb, recordedAt: confirmedAt };
       if (kind === 'student') {
         await tx.studentAttendance.updateMany({ where: { studentId: { in: mgroup.ids }, date: day, session }, data });
       } else {
