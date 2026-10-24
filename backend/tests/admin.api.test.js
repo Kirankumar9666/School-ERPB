@@ -418,6 +418,137 @@ test('holidays: an impossible calendar date is 400, not 500', async () => {
   assert.ok(res.body.errors?.date, 'the field error names date');
 });
 
+test('holidays: edit moves a holiday and keeps its id', async () => {
+  const created = await request(ctx.base, '/admin/holidays', {
+    method: 'POST',
+    token: admin.accessToken,
+    body: { date: '2027-03-01', name: 'Edit Move Probe' },
+  });
+  assert.equal(created.status, 201);
+  const id = created.body.data.id;
+
+  const updated = await request(ctx.base, `/admin/holidays/${id}`, {
+    method: 'PUT',
+    token: admin.accessToken,
+    body: { date: '2027-03-02', name: 'Edit Move Probe Updated' },
+  });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.data.id, id, 'the holiday keeps its id');
+  assert.equal(updated.body.data.date, '2027-03-02');
+  assert.equal(updated.body.data.name, 'Edit Move Probe Updated');
+
+  const listed = await request(ctx.base, '/school/holidays', { token: admin.accessToken });
+  const row = listed.body.data.find((h) => h.id === id);
+  assert.ok(row, 'the edited holiday is still in the school list');
+  assert.equal(row.date, '2027-03-02');
+  assert.equal(row.name, 'Edit Move Probe Updated');
+
+  await request(ctx.base, `/admin/holidays/${id}`, { method: 'DELETE', token: admin.accessToken });
+});
+
+test('holidays: edit can keep the holiday on its own date', async () => {
+  const created = await request(ctx.base, '/admin/holidays', {
+    method: 'POST',
+    token: admin.accessToken,
+    body: { date: '2027-03-03', name: 'Self Date Probe' },
+  });
+  assert.equal(created.status, 201);
+  const id = created.body.data.id;
+
+  const updated = await request(ctx.base, `/admin/holidays/${id}`, {
+    method: 'PUT',
+    token: admin.accessToken,
+    body: { date: '2027-03-03', name: 'Self Date Probe Renamed' },
+  });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.data.id, id);
+  assert.equal(updated.body.data.date, '2027-03-03');
+  assert.equal(updated.body.data.name, 'Self Date Probe Renamed');
+
+  await request(ctx.base, `/admin/holidays/${id}`, { method: 'DELETE', token: admin.accessToken });
+});
+
+test('holidays: edit refuses a date already used by another holiday', async () => {
+  const a = await request(ctx.base, '/admin/holidays', {
+    method: 'POST',
+    token: admin.accessToken,
+    body: { date: '2027-03-04', name: 'Clash Probe A' },
+  });
+  const b = await request(ctx.base, '/admin/holidays', {
+    method: 'POST',
+    token: admin.accessToken,
+    body: { date: '2027-03-05', name: 'Clash Probe B' },
+  });
+  assert.equal(a.status, 201);
+  assert.equal(b.status, 201);
+
+  const aId = a.body.data.id;
+  const bId = b.body.data.id;
+  const res = await request(ctx.base, `/admin/holidays/${aId}`, {
+    method: 'PUT',
+    token: admin.accessToken,
+    body: { date: '2027-03-05', name: 'Clash Probe A Moved' },
+  });
+  assert.equal(res.status, 409);
+  assert.equal(res.body.code, 'DUPLICATE');
+  assert.equal(res.body.message, 'A holiday already exists on that date');
+
+  const listed = await request(ctx.base, '/school/holidays', { token: admin.accessToken });
+  const rowA = listed.body.data.find((h) => h.id === aId);
+  const rowB = listed.body.data.find((h) => h.id === bId);
+  assert.equal(rowA.date, '2027-03-04', 'the refused holiday did not move');
+  assert.equal(rowA.name, 'Clash Probe A');
+  assert.equal(rowB.date, '2027-03-05');
+  assert.equal(rowB.name, 'Clash Probe B');
+
+  await request(ctx.base, `/admin/holidays/${aId}`, { method: 'DELETE', token: admin.accessToken });
+  await request(ctx.base, `/admin/holidays/${bId}`, { method: 'DELETE', token: admin.accessToken });
+});
+
+test('holidays: edit an impossible calendar date is 400, not 500', async () => {
+  const created = await request(ctx.base, '/admin/holidays', {
+    method: 'POST',
+    token: admin.accessToken,
+    body: { date: '2027-03-06', name: 'Bad Date Probe' },
+  });
+  assert.equal(created.status, 201);
+  const id = created.body.data.id;
+
+  const res = await request(ctx.base, `/admin/holidays/${id}`, {
+    method: 'PUT',
+    token: admin.accessToken,
+    body: { date: '2026-13-40', name: 'Bad Date Probe' },
+  });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, 'VALIDATION_ERROR');
+  assert.ok(res.body.errors?.date, 'the field error names date');
+
+  const listed = await request(ctx.base, '/school/holidays', { token: admin.accessToken });
+  assert.equal(listed.body.data.find((h) => h.id === id).date, '2027-03-06');
+
+  await request(ctx.base, `/admin/holidays/${id}`, { method: 'DELETE', token: admin.accessToken });
+});
+
+test('holidays: edit an unknown holiday is 404', async () => {
+  const res = await request(ctx.base, '/admin/holidays/hol-nope', {
+    method: 'PUT',
+    token: admin.accessToken,
+    body: { date: '2027-03-07', name: 'Missing Probe' },
+  });
+  assert.equal(res.status, 404);
+  assert.equal(res.body.code, 'NOT_FOUND');
+});
+
+test('holidays: edit is admin-only', async () => {
+  const res = await request(ctx.base, '/admin/holidays/hol-001', {
+    method: 'PUT',
+    token: student.accessToken,
+    body: { date: '2027-03-08', name: 'Forbidden Probe' },
+  });
+  assert.equal(res.status, 403);
+  assert.equal(res.body.code, 'FORBIDDEN');
+});
+
 test('leaves: pending list shows a new application and status update works', async () => {
   const teacher = await login(ctx.base, 'teacher', 'Teacher@123');
   const create = await request(ctx.base, '/employees/emp-001/leaves/apply', {

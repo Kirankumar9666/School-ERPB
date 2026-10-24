@@ -2987,6 +2987,40 @@ router.post('/holidays', async (req, res) => {
   }
 });
 
+/**
+ * PUT /api/v1/admin/holidays/:id — edit a holiday in place.
+ *
+ * Updating by id (never delete + create) keeps the holiday's identity and the
+ * audit trail continuous. The unique index on Holiday.date is the authority on
+ * collisions: moving onto another holiday's date is a 409, while saving this
+ * holiday on its own date is allowed. `dateOnly`/`apiDate` are the same shared
+ * calendar-date validation used by create, so an impossible date is a 400.
+ */
+router.put('/holidays/:id', async (req, res) => {
+  const parsed = holidaySchema.safeParse(req.body);
+  if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
+
+  try {
+    const updated = await prisma.holiday.update({
+      where: { id: req.params.id },
+      data: { date: apiDate(parsed.data.date), name: parsed.data.name },
+    });
+    return sendSuccess(
+      res,
+      { id: updated.id, date: toDateStr(updated.date), name: updated.name },
+      'Holiday updated'
+    );
+  } catch (err) {
+    if (err.code === 'P2002') {
+      return sendError(res, 'A holiday already exists on that date', 409, 'DUPLICATE');
+    }
+    if (err.code === 'P2025') {
+      return sendError(res, 'Holiday not found', 404, 'NOT_FOUND');
+    }
+    throw err;
+  }
+});
+
 /** DELETE /api/v1/admin/holidays/:id */
 router.delete('/holidays/:id', async (req, res) => {
   try {
