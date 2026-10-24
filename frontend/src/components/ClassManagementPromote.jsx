@@ -29,10 +29,9 @@ import { useSubmitGuard } from '../utils/useSubmitGuard';
  *
  * The class list, the student counts, which grade is the top one and what each
  * class promotes INTO all come from the server, which derives them from the real
- * class table. `topGradeBasis` is shown to the admin: if it says the top grade came
- * from the classes that currently hold students, then a stale empty Class 12 that
- * nobody teaches cannot hijack the graduation button — and the admin can see that
- * it did not.
+ * class table. The final class is named from the server's own `topLevelLabel`, so
+ * a stale empty Class 12 that nobody teaches cannot hijack the graduation button
+ * or the sentence the admin reads.
  *
  * ## The one-student path is a popup, not a pair of buttons
  *
@@ -54,12 +53,6 @@ import { useSubmitGuard } from '../utils/useSubmitGuard';
  */
 const shortClassLabel = (label) =>
   typeof label === 'string' ? label.replace(/^Class\s+/, '') : label;
-
-/** What the top level was derived from, spelled out for the admin. */
-const BASIS_TEXT = {
-  classes_with_students: 'the highest level among classes that currently hold students',
-  all_classes: 'the highest level of any class on file (no class currently holds students)',
-};
 
 /** Human wording for one student-review flag. */
 function flagText(row) {
@@ -281,7 +274,7 @@ export default function ClassManagementPromote() {
     );
   }
 
-  const { classes, currentAcademicYear, nextAcademicYear, topLevelLabel, topLevelBasis } = overview;
+  const { classes, currentAcademicYear, nextAcademicYear, topLevelLabel } = overview;
   const promotable = classes.filter((c) => c.action !== 'none');
 
   return (
@@ -298,8 +291,8 @@ export default function ClassManagementPromote() {
           top level <strong>{topLevelLabel}</strong>
         </div>
         <div className="text-sm text-muted" style={{ marginTop: 4 }}>
-          The top level — the one that graduates rather than moves up — is derived
-          from {BASIS_TEXT[topLevelBasis] || 'the class list'}, not configured or typed in.
+          Your final class is <strong>{topLevelLabel}</strong> — students in this class
+          graduate instead of moving up.
         </div>
       </div>
 

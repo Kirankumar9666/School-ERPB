@@ -407,7 +407,12 @@ input, select, textarea { font-family: inherit; }
   background: var(--gold-soft); color: var(--gold);
   border: 1px dashed #cdbd85; font-weight: 600;
 }
-.cal-day.today { outline: 2px solid var(--ink); outline-offset: 1px; }
+/* Today is a ring, never a fill: a day can also be a holiday or a reminder,
+   and that category colour must stay visible underneath. */
+.cal-day.today { box-shadow: inset 0 0 0 2px var(--ink); }
+/* Keep the category colour even when today wins the cascade. */
+.cal-day.today.holiday { background: var(--gold-soft); color: var(--gold); }
+.cal-day.today.reminder { color: var(--clr-accent); }
 
 /* ═══════════════════════════════════════════════════════ COMPACT CALENDAR
    Student Holiday Calendar — small cells instead of the tall aspect-ratio

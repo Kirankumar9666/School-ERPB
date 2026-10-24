@@ -131,7 +131,7 @@ export default function CreateClassModal({ levels, onClose, onCreated, onLevelAd
           onClick={() => setAddingLevel(true)}
           disabled={saving}
         >
-          <Plus size={14} /> Add a level
+          <Plus size={14} /> Add a class level
         </button>
       </div>
 
