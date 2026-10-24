@@ -28,4 +28,34 @@ const dateOnly = z
   .min(1, 'Date is required')
   .refine((value) => parseDateOnly(value) !== null, 'Enter a valid calendar date');
 
-module.exports = { parseDateOnly, dateOnly };
+/**
+ * Parse a present date-only value, throwing a 400 instead of returning null.
+ *
+ * This is the safe conversion for route/service code: a present but impossible
+ * value must never become a null (or an Invalid Date) passed to Prisma. Callers
+ * that allow an absent date check for undefined/null before calling this.
+ */
+const parseDateOnlyOrThrow = (value) => {
+  const parsed = parseDateOnly(value);
+  if (!parsed) {
+    const err = new Error('Enter a valid calendar date');
+    err.status = 400;
+    err.code = 'VALIDATION_ERROR';
+    throw err;
+  }
+  return parsed;
+};
+
+/** An optional date: omitted is allowed, exactly like the old `.optional()`. */
+const optionalDateOnly = dateOnly.optional();
+
+/** A nullable date: omitted or null is allowed, exactly like `.nullish()`. */
+const nullableDateOnly = dateOnly.nullish();
+
+module.exports = {
+  parseDateOnly,
+  parseDateOnlyOrThrow,
+  dateOnly,
+  optionalDateOnly,
+  nullableDateOnly,
+};

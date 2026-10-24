@@ -19,6 +19,12 @@ const { sendSuccess, sendError, sendValidationError } = require('../../utils/res
 const { passwordSchema } = require('../../services/passwords');
 const { wrapAsync } = require('../../utils/asyncRoute');
 const { contactSchema } = require('../../utils/phone');
+const {
+  dateOnly,
+  optionalDateOnly,
+  nullableDateOnly,
+  parseDateOnlyOrThrow,
+} = require('../../utils/date');
 const prisma = require('../../services/prisma');
 const { isTransientDbError } = require('../../services/prisma');
 const cache = require('../../utils/cache');
@@ -161,9 +167,6 @@ router.use((req, res, next) => {
 /** Generate a unique id (same format the mock store used) */
 const newId = (prefix) => `${prefix}-${Date.now()}`;
 
-/** ISO date regex */
-const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD');
-
 /**
  * A money amount in WHOLE rupees (QA-A1-010's sibling finding).
  *
@@ -175,8 +178,14 @@ const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD
  */
 const wholeRupees = z.number().min(0).int({ message: 'Enter a whole rupee amount' });
 
-/** Convert an API 'YYYY-MM-DD' string to a UTC-midnight Date (or null) */
-const apiDate = (value) => (value ? new Date(`${value}T00:00:00.000Z`) : null);
+/**
+ * Convert an API 'YYYY-MM-DD' string to a UTC-midnight Date, or null when the
+ * field is absent. A present value that is not a real calendar date throws a
+ * 400 — it must never become a null/Invalid Date passed to Prisma.
+ */
+const apiDate = (value) => (
+  value === undefined || value === null ? null : parseDateOnlyOrThrow(value)
+);
 
 /* ---------- Bulk marks entry (CSV / XLSX) ---------- */
 
@@ -386,7 +395,7 @@ const studentSchema = z.object({
    * nobody checks. Compared date-string to date-string so no timezone is
    * involved: 'YYYY-MM-DD' sorts lexicographically exactly as it does in time.
    */
-  dob: dateStr.refine((v) => v <= new Date().toISOString().slice(0, 10), {
+  dob: dateOnly.refine((v) => v <= new Date().toISOString().slice(0, 10), {
     message: 'Date of birth cannot be in the future',
   }).optional(),
   /**
@@ -1580,7 +1589,7 @@ const employeeSchema = z.object({
   name: z.string().min(2).max(100),
   employeeId: z.string().min(1).max(50).optional(),
   gender: z.enum(Object.values(Gender)).optional(),
-  dob: dateStr.optional(),
+  dob: optionalDateOnly,
   bloodGroup: z.string().max(5).optional(),
   mobile: contactSchema.optional(),
   email: z.string().email().optional(),
@@ -1590,7 +1599,7 @@ const employeeSchema = z.object({
   designation: z.string().min(1).max(100).optional(),
   role: z.enum(EMPLOYEE_ROLES).optional(),
   qualification: z.string().max(200).optional(),
-  dateOfJoining: dateStr.optional(),
+  dateOfJoining: optionalDateOnly,
   experience: z.string().max(50).optional(),
   reportingPrincipal: z.string().max(100).optional(),
   employmentType: z.enum(Object.values(EmploymentType)).optional(),
@@ -1830,7 +1839,7 @@ const readEmployee = async (id) => {
  */
 const endEmploymentSchema = z.object({
   reason: z.enum(Object.values(EmploymentEndReason)),
-  lastWorkingDay: dateStr,
+  lastWorkingDay: dateOnly,
   description: z
     .string()
     .optional()
@@ -2059,6 +2068,11 @@ const CLASS_MGMT_ERRORS = {
  * admin hunting for something they already scrolled past.
  */
 const classMgmtError = (res, err) => {
+  // A conversion helper may reject a present-but-impossible date with a plain
+  // 400 before the service can attach one of its own codes.
+  if (err?.status === 400) {
+    return sendError(res, err.message || 'Invalid request', 400, 'VALIDATION_ERROR');
+  }
   const entry = CLASS_MGMT_ERRORS[err?.code];
   if (!entry) return null;
   const [status, message] = entry;
@@ -2375,7 +2389,7 @@ const historicalRecordSchema = z.object({
     subject: z.string({ error: 'Subject is required' }).min(1, 'Subject is required').max(100),
     maxMarks: z.number({ error: 'Max marks is required' }).int().positive('Max marks must be above 0'),
     obtained: z.number({ error: 'Obtained marks is required' }).int().nonnegative('Obtained cannot be negative'),
-    examDate: dateStr.nullish(),
+    examDate: nullableDateOnly,
   })).default([]),
 }).refine((v) => Boolean(v.existingStudentId) !== Boolean(v.newStudent), {
   message: 'Choose an existing student, or add one as a new historical record',
@@ -2642,7 +2656,7 @@ const paymentSchema = z.object({
    *  payment; removing one that was entered in error is DELETE, not a negative. */
   amount: z.number().int().min(1).max(100000000),
   /** 'YYYY-MM-DD'; omitted → today (UTC) */
-  paidOn: dateStr.optional(),
+  paidOn: optionalDateOnly,
   /** Free text: 'advance', 'salary on hold', a UTR/reference… */
   note: z.string().trim().max(200).optional().or(z.literal('')),
 });
@@ -2743,7 +2757,7 @@ router.delete('/payroll/:employeeId/:month/payments/:paymentId', async (req, res
 /** POST /api/v1/admin/payroll/:employeeId/:month/mark-paid body */
 const markPaidSchema = z.object({
   /** 'YYYY-MM-DD'; omitted → today (UTC) */
-  paidDate: dateStr.optional(),
+  paidDate: optionalDateOnly,
 });
 
 /**
@@ -2947,7 +2961,7 @@ router.get('/announcements/:annId/pdf', async (req, res) => {
 /* ---------- Holidays ---------- */
 
 const holidaySchema = z.object({
-  date: dateStr,
+  date: dateOnly,
   name: z.string().min(2).max(100),
 });
 
@@ -3008,7 +3022,7 @@ router.put('/settings', async (req, res) => {
 const attendanceSchema = z.object({
   entityType: z.enum(['student', 'employee']),
   entityId: z.string().min(1),
-  date: dateStr,
+  date: dateOnly,
   session: sessionEnum,
   status: z.enum(Object.values(AttendanceStatus).map(statusToApi)),
   workingHours: z.number().min(0).max(24).optional(),
@@ -3087,7 +3101,7 @@ router.get('/attendance/group', async (req, res) => {
     return sendError(res, 'kind must be "student" or "employee"', 400, 'VALIDATION_ERROR');
   }
   if (!groupKey) return sendError(res, 'groupKey is required', 400, 'VALIDATION_ERROR');
-  if (!dateStr.safeParse(dateQ).success) {
+  if (!dateOnly.safeParse(dateQ).success) {
     return sendError(res, 'date must be YYYY-MM-DD', 400, 'VALIDATION_ERROR');
   }
   if (session !== 'FN' && session !== 'AN') {
@@ -3167,7 +3181,7 @@ const adminClassSaveSchema = z.object({
   classId: adminClassMarksQuery.classId,
   subject: adminClassMarksQuery.subject.unwrap(),
   examName: adminClassMarksQuery.examName.unwrap(),
-  date: dateStr.optional(),
+  date: optionalDateOnly,
   maxMarks: z.number().int().min(1).max(MARKS_MAX),
 });
 
@@ -3180,7 +3194,7 @@ const adminClassMarkEntrySchema = z.object({
 const marksSchema = z.object({
   studentId: z.string().min(1),
   examName: z.string().min(2).max(100),
-  date: dateStr.optional(),
+  date: optionalDateOnly,
   subjects: z.array(z.object({
     subject: z.string().min(1),
     maxMarks: z.number().min(1),
@@ -3903,7 +3917,7 @@ const achievementSchema = z.object({
   studentId: z.string().min(1),
   title: z.string().min(3).max(200),
   description: z.string().min(10).max(500),
-  date: dateStr,
+  date: dateOnly,
   type: z.enum(ACHIEVEMENT_TYPES),
 });
 

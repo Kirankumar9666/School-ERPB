@@ -23,11 +23,10 @@ const { ANNOUNCEMENT_CATEGORIES } = require('../constants/options');
 const prisma = require('./prisma');
 const { toDateStr, toIso, schoolToday, classLabel } = require('./mappers');
 const { teacherTeachesClass } = require('./timetableScope');
-const { apiDate } = require('./attendance');
+const { dateOnly, optionalDateOnly, parseDateOnlyOrThrow } = require('../utils/date');
 const { sendDocumentPdf, docNameFrom } = require('./documents');
 
 const newId = (prefix) => `${prefix}-${Date.now()}`;
-const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD');
 
 /**
  * Scopes a caller may pick in the "Send To…" popup. ROLES is deliberately not
@@ -43,9 +42,9 @@ const baseFields = {
   body: z.string().min(10),
   category: z.enum(ANNOUNCEMENT_CATEGORIES),
   // Omitted on create → the circular is visible from today (server date).
-  showFrom: dateStr.optional(),
+  showFrom: optionalDateOnly,
   // Required: after this day the circular stops appearing everywhere.
-  showUntil: dateStr,
+  showUntil: dateOnly,
 };
 
 /**
@@ -239,8 +238,8 @@ const createAnnouncement = async (input, { scope = AnnouncementScope.ROLES, file
       attributedTo: author ? author.name : null,
       pdfFileName: file ? docNameFrom(file) : null,
       pdfData: file ? file.buffer : null,
-      showFrom: apiDate(showFrom),
-      showUntil: apiDate(input.showUntil),
+      showFrom: parseDateOnlyOrThrow(showFrom),
+      showUntil: parseDateOnlyOrThrow(input.showUntil),
     },
     // The created row is handed straight to `mapAnnouncementAdmin`, so the
     // class label and author relations have to come back with it.

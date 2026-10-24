@@ -109,6 +109,17 @@ test('broad publish still works over JSON and lands on the audience roles', asyn
   assert.equal(del.status, 200);
 });
 
+test('announcements: an impossible showUntil is 400, not 500', async () => {
+  const res = await request(ctx.base, '/admin/announcements', {
+    method: 'POST',
+    token: admin.accessToken,
+    body: { ...baseFields({ title: 'Impossible showUntil', showUntil: '2026-13-40' }), targetRoles: ['student'] },
+  });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, 'VALIDATION_ERROR');
+  assert.ok(res.body.errors?.showUntil, 'the field error names showUntil');
+});
+
 /* ---------- PDF attachment on the broad publish ---------- */
 
 test('broad publish accepts a real PDF and rejects a non-PDF', async () => {

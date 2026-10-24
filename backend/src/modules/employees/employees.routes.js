@@ -25,6 +25,11 @@ const {
 const { payrollShape, summarizePayments } = require('../../services/payroll');
 const { openEmploymentEnd } = require('../../services/employment');
 const { wrapAsync } = require('../../utils/asyncRoute');
+const {
+  dateOnly,
+  optionalDateOnly,
+  parseDateOnlyOrThrow,
+} = require('../../utils/date');
 const { summarizeAttendance, buildDayRecords } = require('../../utils/attendance');
 const { buildPayslipPdf, payslipFilename } = require('../../services/payslip');
 const { sendDocumentPdf, documentUpload, documentUploadError, checkOptionalPdf } = require('../../services/documents');
@@ -181,8 +186,8 @@ const normalizeReason = (raw) => String(raw).replace(/\r\n?/g, '\n').trim();
  */
 const applyLeaveSchema = z.object({
   type: z.enum(Object.values(LeaveType)),
-  fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD'),
-  toDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD'),
+  fromDate: dateOnly,
+  toDate: dateOnly,
   reason: z
     .string()
     .transform(normalizeReason)
@@ -205,8 +210,8 @@ router.post('/:id/leaves/apply', requireRole([...EMPLOYEE_ROLES]), async (req, r
     data: {
       employeeId: id,
       type,
-      fromDate: new Date(`${fromDate}T00:00:00.000Z`),
-      toDate: new Date(`${toDate}T00:00:00.000Z`),
+      fromDate: parseDateOnlyOrThrow(fromDate),
+      toDate: parseDateOnlyOrThrow(toDate),
       // Already normalised by the schema's transform (CRLF→LF, ends trimmed,
       // interior newlines kept) — stored exactly as the author typed it, so the
       // popup in either portal can re-render the line breaks verbatim.
@@ -369,8 +374,6 @@ router.get('/:id/documents/:docId/download', requireRole([ROLES.ADMIN, ...EMPLOY
  * API, not just hidden in the UI.
  */
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-
 /** Guard: the class must be one this employee is assigned to teach.
  *
  * The class-visibility rule itself lives in services/studentAccess.js
@@ -434,7 +437,7 @@ router.get('/:id/attendance/group', requireRole([...TEACHER_ROLES]), async (req,
   const date = String(req.query.date || '').trim();
   const session = String(req.query.session || '').trim();
   if (!(await assertOwnClass(req, res, id, classId))) return undefined;
-  if (!ISO_DATE.test(date)) return sendError(res, 'date must be YYYY-MM-DD', 400, 'VALIDATION_ERROR');
+  if (!dateOnly.safeParse(date).success) return sendError(res, 'date must be YYYY-MM-DD', 400, 'VALIDATION_ERROR');
   if (session !== 'FN' && session !== 'AN') return sendError(res, 'session must be "FN" or "AN"', 400, 'VALIDATION_ERROR');
 
   const roster = await loadAttendanceRoster('student', classId, date, session);
@@ -650,7 +653,7 @@ const teacherMarksSchema = z.object({
   classId: z.string().min(1),
   subject: z.string().trim().min(1).max(100),
   examName: z.string().trim().min(2).max(100),
-  date: z.string().regex(ISO_DATE, 'Exam date must be YYYY-MM-DD').optional(),
+  date: optionalDateOnly,
   maxMarks: z.number().int().min(1).max(MARKS_MAX),
   entries: z.array(z.object({
     studentId: z.string().min(1),
@@ -658,8 +661,14 @@ const teacherMarksSchema = z.object({
   })).min(1),
 });
 
-/** 'YYYY-MM-DD' → UTC-midnight Date, matching the @db.Date columns. */
-const apiDate = (value) => (value ? new Date(`${value}T00:00:00.000Z`) : new Date());
+/**
+ * 'YYYY-MM-DD' → UTC-midnight Date, matching the @db.Date columns. An absent
+ * marks date means "now"; a present invalid date throws a 400 instead of
+ * falling through as null/Invalid Date.
+ */
+const apiDate = (value) => (
+  value === undefined || value === null ? new Date() : parseDateOnlyOrThrow(value)
+);
 
 /**
  * The one gate every teacher marks route passes through: the caller may only act

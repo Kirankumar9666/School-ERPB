@@ -107,6 +107,17 @@ test('apply leave: validation (short reason, bad dates) → 400', async () => {
   assert.equal(res.body.code, 'VALIDATION_ERROR');
 });
 
+test('apply leave: an impossible fromDate is 400, not 500', async () => {
+  const res = await request(ctx.base, '/employees/emp-001/leaves/apply', {
+    method: 'POST',
+    token: teacher.accessToken,
+    body: { type: 'casual', fromDate: '2026-13-40', toDate: '2026-12-02', reason: 'Family event out of town' },
+  });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, 'VALIDATION_ERROR');
+  assert.ok(res.body.errors?.fromDate, 'the field error names fromDate');
+});
+
 test('apply leave: admin is not allowed (employee-only) → 403', async () => {
   const res = await request(ctx.base, '/employees/emp-001/leaves/apply', {
     method: 'POST',

@@ -35,6 +35,7 @@
  */
 const prisma = require('./prisma');
 const { classIdOf, classLabel } = require('./mappers');
+const { parseDateOnlyOrThrow } = require('../utils/date');
 const fees = require('./fees');
 const classesService = require('./classes');
 
@@ -2185,7 +2186,7 @@ const saveHistoricalRecord = async ({
           // A register often records the year of an exam but not the day. Left null
           // rather than invented — an invented date is a fact nobody actually knows,
           // and it would then sort as though it were real.
-          date: m.examDate ? new Date(`${m.examDate}T00:00:00.000Z`) : null,
+          date: m.examDate ? parseDateOnlyOrThrow(m.examDate) : null,
           academicYearId,
           source: 'historical',
         },

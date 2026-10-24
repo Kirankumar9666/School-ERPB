@@ -19,18 +19,13 @@ const {
   teacherTimetableClasses,
   teacherTeachesClass: teacherTimetableTeachesClass,
 } = require('./timetableScope');
+const { dateOnly, parseDateOnlyOrThrow } = require('../utils/date');
 
 /** Milliseconds after a confirmed save during which the same day stays editable. */
 const ATTENDANCE_EDIT_WINDOW_MS = 60 * 60 * 1000;
 
-/** ISO date pattern (YYYY-MM-DD) — the API's date spelling */
-const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD');
-
 /** The two sessions of a school day — required on every session-scoped call. */
 const sessionEnum = z.enum(['FN', 'AN']);
-
-/** Convert an API 'YYYY-MM-DD' string to a UTC-midnight Date */
-const apiDate = (value) => new Date(`${value}T00:00:00.000Z`);
 
 /**
  * Request body of a whole-group save. Exported so the admin router and the
@@ -41,7 +36,7 @@ const apiDate = (value) => new Date(`${value}T00:00:00.000Z`);
 const bulkAttendanceSchema = z.object({
   kind: z.enum(['student', 'employee']),
   groupKey: z.string().min(1),
-  date: dateStr,
+  date: dateOnly,
   session: sessionEnum,
   /** Explicit "Edit past attendance" — lifts the closed 1-hour window. */
   override: z.boolean().optional(),
@@ -76,7 +71,7 @@ const attendanceGroup = async (kind, groupKey, date) => {
       include: {
         students: {
           // Enrollment gate — inclusive: enrolled on the requested day = listed.
-          where: date ? { enrolledAt: { lte: apiDate(date) } } : undefined,
+          where: date ? { enrolledAt: { lte: parseDateOnlyOrThrow(date) } } : undefined,
           orderBy: { rollNumber: 'asc' },
         },
       },
@@ -123,7 +118,7 @@ const loadAttendanceRoster = async (kind, groupKey, date, session) => {
   const group = await attendanceGroup(kind, groupKey, date);
   if (!group) return null;
 
-  const day = apiDate(date);
+  const day = parseDateOnlyOrThrow(date);
   const ids = group.members.map((m) => m.id);
   const rows = ids.length
     ? await (kind === 'student'
@@ -179,7 +174,7 @@ const loadAttendanceRoster = async (kind, groupKey, date, session) => {
  * @param {string} [input.markedBy] Username recorded on the confirmation row
  */
 const saveBulkAttendance = async ({ kind, groupKey, date, session, entries, override, markedBy }) => {
-  const day = apiDate(date);
+  const day = parseDateOnlyOrThrow(date);
 
   const group = await attendanceGroup(kind, groupKey, date);
   if (!group) {
@@ -368,8 +363,6 @@ const teacherClassGroups = (employeeId) => teacherTimetableClasses(employeeId);
 
 module.exports = {
   ATTENDANCE_EDIT_WINDOW_MS,
-  dateStr,
-  apiDate,
   sessionEnum,
   bulkAttendanceSchema,
   attendanceGroup,

@@ -9,6 +9,7 @@
  *   holiday        → excluded from working days entirely
  */
 const { toDateStr, statusToApi } = require('../services/mappers');
+const { parseDateOnly } = require('./date');
 
 const STATUS_WEIGHT = { present: 1, late: 1, 'half-day': 0.5, absent: 0, holiday: 0 };
 
@@ -75,9 +76,8 @@ const buildDayRecords = (rows, withHours) => {
 
 /** Weekday number (0 = Sunday) for a 'YYYY-MM-DD' key, or null if unparseable. */
 const weekdayOf = (key) => {
-  if (typeof key !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(key)) return null;
-  const d = new Date(`${key}T00:00:00.000Z`);
-  return Number.isNaN(d.getTime()) ? null : d.getUTCDay();
+  const d = parseDateOnly(key);
+  return d ? d.getUTCDay() : null;
 };
 
 /**

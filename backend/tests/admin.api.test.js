@@ -248,6 +248,17 @@ test('attendance marking: invalid status/date → 400', async () => {
   assert.equal(badSession.status, 400);
 });
 
+test('attendance marking: an impossible calendar date is 400, not 500', async () => {
+  const res = await request(ctx.base, '/admin/attendance', {
+    method: 'POST',
+    token: admin.accessToken,
+    body: { entityType: 'student', entityId: 'stu-001', date: '2026-13-40', session: 'FN', status: 'present' },
+  });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, 'VALIDATION_ERROR');
+  assert.ok(res.body.errors?.date, 'the field error names date');
+});
+
 test('marks: publish exam results and read them back', async () => {
   const res = await request(ctx.base, '/admin/marks', {
     method: 'POST',
@@ -261,6 +272,20 @@ test('marks: publish exam results and read them back', async () => {
 
   const read = await request(ctx.base, '/students/stu-002/marks', { token: admin.accessToken });
   assert.ok(read.body.data.some((e) => e.examName === 'Unit Test 2'), 'published exam visible in student marks');
+});
+
+test('marks: an impossible exam date is 400, not 500', async () => {
+  const res = await request(ctx.base, '/admin/marks', {
+    method: 'POST',
+    token: admin.accessToken,
+    body: {
+      studentId: 'stu-002', examName: 'Impossible Date Test', date: '2026-13-40',
+      subjects: [{ subject: 'Mathematics', maxMarks: 100, obtained: 75 }],
+    },
+  });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, 'VALIDATION_ERROR');
+  assert.ok(res.body.errors?.date, 'the field error names date');
 });
 
 test('announcements: create + verify via school endpoint', async () => {
@@ -380,6 +405,17 @@ test('holidays: create + list + delete round-trip', async () => {
 
   const del = await request(ctx.base, `/admin/holidays/${id}`, { method: 'DELETE', token: admin.accessToken });
   assert.equal(del.status, 200);
+});
+
+test('holidays: an impossible calendar date is 400, not 500', async () => {
+  const res = await request(ctx.base, '/admin/holidays', {
+    method: 'POST',
+    token: admin.accessToken,
+    body: { date: '2026-13-40', name: 'Impossible Date Holiday' },
+  });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, 'VALIDATION_ERROR');
+  assert.ok(res.body.errors?.date, 'the field error names date');
 });
 
 test('leaves: pending list shows a new application and status update works', async () => {
