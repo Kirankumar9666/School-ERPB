@@ -31,6 +31,20 @@ const wipeAll = async (prisma) => {
   for (const model of models) {
     await prisma[model].deleteMany();
   }
+
+  /* Grade levels are NOT deleted, deliberately, and this is why.
+
+     `gradeLevel` has always sat outside this list, and the rows are re-inserted
+     by `seed()` with `skipDuplicates` — a level a test added mid-run therefore
+     survives the next file's wipe. Since the final-class flag now lives on that
+     row, a leftover flag would leak from one test file into the next and make
+     `topGradeBasis: 'final_class'` appear in a file that never set it.
+
+     So the wipe RESETS the flag instead of deleting the row: every level goes
+     back to "not final" and each file starts from a school with no final class,
+     which is the state the fixture represents. The rows themselves are left
+     alone so no class is orphaned and no order is disturbed. */
+  await prisma.gradeLevel.updateMany({ where: { isFinal: true }, data: { isFinal: false } });
 };
 
 module.exports = { wipeAll };

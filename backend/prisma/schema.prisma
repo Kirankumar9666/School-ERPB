@@ -176,6 +176,13 @@ model GradeLevel {
   id        String   @id @default(cuid())
   name      String   @unique
   order     Int      @unique
+  // The school's ONE final class — the level whose students graduate rather than
+  // move up. Stored on the level (not guessed from the class list) so the four
+  // places that used to derive it from three different rules all read one fact.
+  // At most one row may be true; enforced by a partial unique index in the
+  // migration AND a clear-then-set transaction in services/classes.js. When no
+  // row is true the app falls back to today's derived behaviour, unchanged.
+  isFinal   Boolean  @default(false)
   classes   Class[]
   createdAt DateTime @default(now())
 }

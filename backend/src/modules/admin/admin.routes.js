@@ -633,6 +633,10 @@ router.get('/students/by-class', async (req, res) => {
 const createClassSchema = z.object({
   levelId: z.string().min(1),
   section: z.string().trim().min(1).max(3).regex(/^[A-Za-z]+$/, 'Letters only, no digits'),
+  /* The deliberate opt-in for a class on a level ABOVE the school's final class.
+     Defaults to false, so the write is refused once with ABOVE_FINAL_CONFIRM
+     rather than silently opening a class past the final year. */
+  allowAboveFinal: z.boolean().optional().default(false),
 });
 
 router.post('/classes', async (req, res) => {
@@ -643,6 +647,7 @@ router.post('/classes', async (req, res) => {
     const { cls, created, label } = await classesService.createClass({
       levelId: parsed.data.levelId,
       section: parsed.data.section,
+      allowAboveFinal: parsed.data.allowAboveFinal,
     });
     if (!created) return sendError(res, `${label} already exists.`, 409, 'DUPLICATE');
     // Drop the cached class list, so the new class reaches every dropdown without
@@ -655,6 +660,7 @@ router.post('/classes', async (req, res) => {
       label,
     }, `${label} created`, 201);
   } catch (err) {
+    if (err.code === 'ABOVE_FINAL_CONFIRM') return sendError(res, err.message, 409, 'ABOVE_FINAL_CONFIRM');
     if (err.code === 'NOT_FOUND') return sendError(res, 'Class level not found', 404, 'NOT_FOUND');
     if (err.code === 'BAD_SECTION') return sendError(res, err.message, 400, 'BAD_SECTION');
     throw err;
@@ -751,8 +757,37 @@ router.get('/class-levels', async (req, res) => {
     id: l.id,
     name: l.name,
     order: l.order,
+    // The school's final class, read here so every screen gets the fact from the
+    // one list it already fetches rather than querying for it separately.
+    isFinal: l.isFinal,
     classCount: classCount.get(l.id) || 0,
   })));
+});
+
+/**
+ * PUT /api/v1/admin/class-levels/final — set (or clear) the school's final class.
+ *
+ * One endpoint for both, because they are one decision: `levelId: null` clears it
+ * and returns the school to the derived fallback. The service clears the previous
+ * final and sets the new one in one transaction, so the partial unique index that
+ * makes "only one" true is never tripped by the ordinary path.
+ */
+router.put('/class-levels/final', async (req, res) => {
+  const parsed = z.object({ levelId: z.string().min(1).nullable() }).safeParse(req.body || {});
+  if (!parsed.success) return sendValidationError(res, parsed.error.flatten().fieldErrors);
+
+  try {
+    const level = await classesService.setFinalLevel({ levelId: parsed.data.levelId });
+    invalidateClassOptions();
+    return sendSuccess(
+      res,
+      level,
+      level ? `${level.name} is now the final class` : 'Final class cleared',
+    );
+  } catch (err) {
+    if (err.code === 'NOT_FOUND') return sendError(res, 'Class level not found', 404, 'NOT_FOUND');
+    throw err;
+  }
 });
 
 /**
@@ -766,6 +801,14 @@ router.get('/class-levels', async (req, res) => {
 const createLevelSchema = z.object({
   name: z.string().trim().min(1).max(20),
   afterId: z.string().min(1).nullish(),
+  /* Asked explicitly, never guessed. Defaults to false: adding a level is usually
+     not the final class, but a small school's next level may be — so the popup
+     puts the question and No is pre-selected. */
+  isFinal: z.boolean().optional().default(false),
+  /* The deliberate opt-in for a level ABOVE the school's final class — planning
+     Class 11 in April while Class 10 is still the final year until term ends.
+     Defaults to false, so the write is refused once with ABOVE_FINAL_CONFIRM. */
+  allowAboveFinal: z.boolean().optional().default(false),
 });
 
 router.post('/class-levels', async (req, res) => {
@@ -776,10 +819,13 @@ router.post('/class-levels', async (req, res) => {
     const level = await classesService.createLevel({
       name: parsed.data.name,
       afterId: parsed.data.afterId || null,
+      isFinal: parsed.data.isFinal,
+      allowAboveFinal: parsed.data.allowAboveFinal,
     });
     invalidateClassOptions();
     return sendSuccess(res, level, `Level ${level.name} added`, 201);
   } catch (err) {
+    if (err.code === 'ABOVE_FINAL_CONFIRM') return sendError(res, err.message, 409, 'ABOVE_FINAL_CONFIRM');
     if (err.code === 'DUPLICATE_LEVEL') return sendError(res, err.message, 409, 'DUPLICATE_LEVEL');
     if (err.code === 'MISSING_NAME') return sendError(res, err.message, 400, 'MISSING_NAME');
     throw err;
@@ -805,13 +851,30 @@ router.put('/class-levels/:id', async (req, res) => {
 /**
  * DELETE /api/v1/admin/class-levels/:id — refused while any class uses it.
  * A level that still holds classes is a decision for the office, not a cascade.
+ *
+ * Deleting the FINAL level is refused ONCE with FINAL_LEVEL_CONFIRM so the office
+ * is told it will clear the final-class setting; repeating the call with
+ * `{ confirmed: true }` does it. A destructive change to how the whole Promote tab
+ * reads is a decision, not a side effect — so it is never silently dropped.
  */
 router.delete('/class-levels/:id', async (req, res) => {
   try {
-    const level = await classesService.deleteLevel({ levelId: req.params.id });
+    const level = await classesService.deleteLevel({
+      levelId: req.params.id,
+      confirmed: req.body?.confirmed === true || req.query?.confirmed === 'true',
+    });
     invalidateClassOptions();
-    return sendSuccess(res, level, `Level ${level.name} removed`);
+    return sendSuccess(
+      res,
+      level,
+      level.clearedFinal
+        ? `Level ${level.name} removed — the final-class setting was cleared`
+        : `Level ${level.name} removed`,
+    );
   } catch (err) {
+    if (err.code === 'FINAL_LEVEL_CONFIRM') {
+      return sendError(res, err.message, 409, 'FINAL_LEVEL_CONFIRM');
+    }
     if (err.code === 'LEVEL_HAS_CLASSES') return sendError(res, err.message, 409, 'LEVEL_HAS_CLASSES');
     if (err.code === 'NOT_FOUND') return sendError(res, 'Class level not found', 404, 'NOT_FOUND');
     throw err;
@@ -2098,10 +2161,17 @@ router.get('/class-management/years', async (req, res) => {
  * GET /api/v1/admin/class-management/overview — the Promote Classes tab.
  *
  * Every class with its live headcount, plus for each class the action that
- * applies: graduate the top grade, promote the rest. `topGradeBasis` is returned
- * so the screen can state WHICH rule picked the top class — "highest grade with
- * students: 10" is a rule the office can check, whereas a graduating class that
- * appears without explanation is just a surprise.
+ * applies: graduate the final class, promote the rest. `topGradeBasis` is returned
+ * so the screen can state WHICH rule picked the top class, and it is now one of:
+ *
+ *   'final_class'           — the level the school marked as final. The office's
+ *                             own decision, and the only basis that can name a
+ *                             class the derivation would not.
+ *   'classes_with_students' — no final class set; the highest level among the
+ *                             classes that actually hold students (today's rule).
+ *   'all_classes'           — no final class set and nobody enrolled yet; the
+ *                             highest level on file, so a school mid-onboarding
+ *                             still has a top named.
  */
 router.get('/class-management/overview', async (req, res) => {
   try {

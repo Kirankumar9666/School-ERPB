@@ -199,6 +199,40 @@ export default function ClassManagementPromote() {
   const [rowBusy, setRowBusy] = useState(null);
   const [pendingMove, setPendingMove] = useState(null); // { cls, student, action } — pass-out only
   const [promoteStudent, setPromoteStudent] = useState(null); // the student the Promote popup is open for
+  // The "Change final class" popup. Levels are read from the server's own list so
+  // the choice is drawn from real rows — never typed, and never a class name
+  // written into the code.
+  const [changingFinal, setChangingFinal] = useState(false);
+  const [levelOptions, setLevelOptions] = useState(null);
+  const [finalBusy, setFinalBusy] = useState(false);
+
+  /** Open the popup, loading the level list it chooses from. */
+  const openFinalPicker = useCallback(async () => {
+    setChangingFinal(true);
+    setLevelOptions(null);
+    try {
+      const res = await api.get('/admin/class-levels');
+      setLevelOptions(res.data.data || []);
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Could not load the class levels');
+      setChangingFinal(false);
+    }
+  }, []);
+
+  /** Set (or clear) the school's final class, then re-read the overview. */
+  const saveFinalLevel = async (levelId) => {
+    setFinalBusy(true);
+    try {
+      const res = await api.put('/admin/class-levels/final', { levelId });
+      toast.success(res.data.message);
+      setChangingFinal(false);
+      await load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Could not set the final class');
+    } finally {
+      setFinalBusy(false);
+    }
+  };
 
   const openRoster = useCallback(async (cls) => {
     setRosterFor(cls);
@@ -274,8 +308,20 @@ export default function ClassManagementPromote() {
     );
   }
 
-  const { classes, currentAcademicYear, nextAcademicYear, topLevelLabel } = overview;
+  /* The level the server named as the school's final class. Read from the same
+     overview the rest of the tab uses, so the banner and the class cards cannot
+     disagree. Null when the school has not set one — then the banner offers the
+     action instead of asserting a fact nobody chose. */
+  const { classes, currentAcademicYear, nextAcademicYear, topLevelLabel, topGradeBasis } = overview;
+  const finalIsSet = topGradeBasis === 'final_class';
   const promotable = classes.filter((c) => c.action !== 'none');
+  /* "Class 10" for a numbered level, "Nursery" for a named one — the same rule the
+     server's shared `classLabel` uses, applied here to a level name on its own (no
+     section). A named level must never become "Class Nursery", and the prefix is
+     chosen from the name's own shape rather than from a list of known names. */
+  const finalName = /^\d+$/.test(String(topLevelLabel))
+    ? `Class ${topLevelLabel}`
+    : String(topLevelLabel);
 
   return (
     <>
@@ -287,12 +333,38 @@ export default function ClassManagementPromote() {
           <strong>{currentAcademicYear?.label || 'No current academic year'}</strong>
           {' · '}
           promoting to <strong>{nextAcademicYear?.label || 'no following year'}</strong>
-          {' · '}
-          top level <strong>{topLevelLabel}</strong>
         </div>
-        <div className="text-sm text-muted" style={{ marginTop: 4 }}>
-          Your final class is <strong>{topLevelLabel}</strong> — students in this class
-          graduate instead of moving up.
+        {/* The final class, in plain school language. Two states, because they are
+            different claims: a fact the office set, or an assumption the app is
+            making on their behalf — and only the second one asks them to fix it.
+            The label is the server's own, so no class name is written here. */}
+        <div style={{ marginTop: 4 }}>
+          {finalIsSet ? (
+            <span>
+              Your final class is <strong>{finalName}</strong> — students in this class
+              {' '}graduate instead of moving up.
+              {' '}
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={openFinalPicker}
+              >
+                Change final class
+              </button>
+            </span>
+          ) : (
+            <span>
+              Final class not set — using the highest class with students
+              {' '}(<strong>{finalName}</strong>).{' '}
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={openFinalPicker}
+              >
+                Set final class
+              </button>
+            </span>
+          )}
         </div>
       </div>
 
@@ -792,6 +864,78 @@ export default function ClassManagementPromote() {
           onDone={finishPromote}
         />
       )}
+
+      {changingFinal && (
+        <ChangeFinalClassModal
+          levels={levelOptions}
+          busy={finalBusy}
+          onClose={() => { if (!finalBusy) setChangingFinal(false); }}
+          onSave={saveFinalLevel}
+        />
+      )}
     </>
+  );
+}
+/**
+ * ChangeFinalClassModal - pick the school's final class, or clear it.
+ *
+ * A plain list of the real levels, with the current one marked. "Clear" is a
+ * first-class action, not an afterthought: a school that marked the wrong level,
+ * or has not decided yet, needs a way back to the derived behaviour - and hiding
+ * that option would make an incorrect setting impossible to undo from the screen
+ * that shows it.
+ */
+function ChangeFinalClassModal({ levels, busy, onClose, onSave }) {
+  return (
+    <Modal
+      title="Final class"
+      onClose={onClose}
+      footer={(
+        <button className="btn btn-secondary" onClick={onClose} disabled={busy}>Cancel</button>
+      )}
+    >
+      <p>
+        The final class is the year students <strong>graduate</strong> from rather than
+        move up. Every section of the level you choose graduates together.
+      </p>
+
+      {!levels ? (
+        <div className="loading-center"><div className="spinner" /></div>
+      ) : (
+        <div className="form-group" style={{ marginTop: 'var(--sp-md)' }}>
+          {levels.map((l) => (
+            <button
+              key={l.id}
+              type="button"
+              className={`weekly-off-day${l.isFinal ? ' active' : ''}`}
+              style={{ justifyContent: 'flex-start', width: '100%' }}
+              aria-pressed={Boolean(l.isFinal)}
+              disabled={busy || l.isFinal}
+              onClick={() => onSave(l.id)}
+            >
+              <strong>{l.name}</strong>
+              {l.isFinal && ' - currently the final class'}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="text-sm text-muted" style={{ marginTop: 'var(--sp-md)' }}>
+        Levels above the final class stay available: they are listed and marked
+        &ldquo;above the final class&rdquo;, and choosing one asks for an explicit
+        confirmation. Nothing is deleted, and clearing the final class removes the
+        warning.
+      </div>
+
+      <button
+        type="button"
+        className="btn btn-secondary"
+        style={{ marginTop: 'var(--sp-md)' }}
+        disabled={busy}
+        onClick={() => onSave(null)}
+      >
+        Clear the final class (use the highest class with students)
+      </button>
+    </Modal>
   );
 }
