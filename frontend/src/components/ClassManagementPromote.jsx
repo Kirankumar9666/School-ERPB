@@ -441,6 +441,11 @@ export default function ClassManagementPromote() {
                     into {c.targetClassLabel} for {nextAcademicYear?.label || 'the next year'}
                     {c.targetWillBeCreated && ' — the class does not exist yet and will be created'}
                   </>
+                ) : c.isAboveFinal ? (
+                  /* A class on a level above the final one. It is not promoted —
+                     the write guard refuses that — and it is not the final class
+                     either, so the sentence must not claim it is. */
+                  `above your final class${finalName ? ` (${finalName})` : ''} — these students graduate rather than move up`
                 ) : (
                   /* The top level graduates. A level with no successor is a
                      different situation and needs a different sentence: the admin
@@ -730,8 +735,20 @@ export default function ClassManagementPromote() {
                   {roster.targetClass
                     ? `Each student can be promoted to a class you choose, or kept in ${roster.label} to repeat the year.`
                     : roster.isTop
-                      ? 'This is the top class — its students graduate rather than move up, so each row can be kept back to repeat the year, or passed out.'
-                      : `${roster.label} has no next level to promote into, so each student can be kept back or passed out. Add the next level on the Students page if the year is not really the last.`}
+                      ? roster.isAboveFinal
+                        ? `${roster.label} is above your final class${finalName ? ` (${finalName})` : ''}, so its students graduate rather than move up. Each row can be kept back to repeat the year, or passed out.`
+                        /* The final class is a LEVEL, so name the level and not this
+                           section: two sections of the same final level must read
+                           the same sentence ("Class 10A" is one section of Class 10).
+                           And when no final class is set, the banner above already
+                           says so, so the row cannot claim one — it states the
+                           fallback basis it is actually using instead. */
+                        : finalIsSet
+                          ? `Your final class is ${finalName} — every section of it graduates rather than moves up, so each row can be kept back to repeat the year, or passed out.`
+                          : `This is the top class, and no final class is set — its students graduate rather than move up, so each row can be kept back to repeat the year, or passed out. Set the final class on the Promote tab to make that official.`
+                      : roster.isLastLevel
+                        ? `${roster.label} is the last class level, so there is nothing to promote into. Set it as the final class on the Promote tab if its students graduate, or add the next level on the Students page.`
+                        : `${roster.label} has no next level to promote into, so each student can be kept back or passed out. Add the next level on the Students page if the year is not really the last.`}
                 </div>
               </div>
 

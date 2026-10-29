@@ -511,6 +511,59 @@ const nextLevelByOrder = async (order, client = null) => {
   });
 };
 
+/**
+ * The school's graduating level, DERIVED — used ONLY when no level is marked final.
+ *
+ * ## Why this exists as one function
+ *
+ * Three places used to answer "which class graduates?" when nothing was stored,
+ * and they answered differently:
+ *
+ *   - classOverview        — the highest level among classes WITH STUDENTS
+ *   - the promote guard    — the maximum `Class.grade` in the whole TABLE
+ *   - resolveTargetClass   — the highest level in the `GradeLevel` table
+ *
+ * With a populated 10-A and an EMPTY 11-A the three disagreed, and they disagreed
+ * in the dangerous direction. The guard compared `source.grade (10) >= maxGrade
+ * (11)`, which is FALSE, so it let the move through; `nextClassFor` then found
+ * level 11 and promoted the children INTO the empty 11-A — a class nobody teaches
+ * — while the overview simultaneously told the office that 10-A graduates. Nobody
+ * was falsely refused; a child was quietly moved somewhere that does not exist.
+ *
+ * One rule, so the four read paths cannot drift again:
+ *
+ *   1. the highest LEVEL ORDER among classes that hold at least one student;
+ *   2. failing that, the highest level in the `GradeLevel` table — a school
+ *      mid-onboarding still has to have a top named.
+ *
+ * Compared on the level ORDER (`Class.grade` holds it), so a pre-primary level
+ * with a negative order can never outrank Class 10 and steal the title.
+ *
+ * Returns null only for a database with no levels at all, which every caller
+ * already treats as "no top to speak of".
+ *
+ * @param {object} [client] a transaction handle, so a write path reads the same
+ *        snapshot it acts on
+ * @returns {Promise<number|null>} the level ORDER, or null
+ */
+const derivedTopOrder = async (client = null) => {
+  const db = client || prisma;
+
+  const withStudents = await db.class.findMany({
+    where: { students: { some: {} } },
+    select: { grade: true, level: { select: { order: true } } },
+  });
+  if (withStudents.length) {
+    return withStudents.reduce(
+      (max, c) => Math.max(max, c.level ? c.level.order : c.grade),
+      Number.NEGATIVE_INFINITY,
+    );
+  }
+
+  const highestLevel = await db.gradeLevel.findFirst({ orderBy: { order: 'desc' } });
+  return highestLevel ? highestLevel.order : null;
+};
+
 const classOverview = async () => {
   const year = await currentYear();
   if (!year) throw Object.assign(new Error('No academic year contains today'), { code: 'NO_CURRENT_YEAR' });
@@ -523,26 +576,32 @@ const classOverview = async () => {
 
   /* The top grade — the class that graduates rather than promotes.
 
-     Derived from the classes that actually have students THIS year, not from the
-     highest grade in the table. Those two differ whenever a school has an empty
-     row left behind (a class created for a year that never filled, or a section
-     that closed), and an empty 11-A would otherwise make the real 10-A offer to
-     promote into a class that does not exist. The fallback to the whole table is
-     for a school mid-onboarding, where no class has students yet and a top grade
-     still has to be named.
+     READ FROM THE STORED FINAL CLASS when the school has set one, because that
+     is a decision the office made and no rule should overrule it. Only when
+     nothing is marked final does `derivedTopOrder()` run, and it is the SAME
+     function the promote guard and the target resolver use, so all three can no
+     longer disagree:
+
+       1. FLAG:        the level marked final. An empty Class 11 above Class 10 no
+                       longer decides anything, and neither does a populated one.
+       2. DERIVED:     the highest level among the classes that hold students THIS
+                       year; else the highest level in the table, so a school
+                       mid-onboarding still has a top named.
 
      Compared on the LEVEL ORDER, which is what `Class.grade` holds — so a
      pre-primary level (a negative order) can never outrank Class 10 and steal the
      graduating title.
 
-     The basis is returned so the UI can show WHICH rule decided it: "highest grade
+     The basis is returned so the UI can show WHICH rule decided it: "highest class
      with students: 10" is an assumption the office can check, whereas a top class
      that appears without explanation is just a surprise. */
   const orderOf = (c) => (c.level ? c.level.order : c.grade);
+  const final = await classesService.finalLevel();
   const withStudents = classes.filter((c) => c._count.students > 0);
-  const pool = withStudents.length ? withStudents : classes;
-  const basis = withStudents.length ? 'classes_with_students' : 'all_classes';
-  const topGrade = pool.reduce((max, c) => Math.max(max, orderOf(c)), 0);
+  const basis = final
+    ? 'final_class'
+    : (withStudents.length ? 'classes_with_students' : 'all_classes');
+  const topGrade = final ? final.order : (await derivedTopOrder() ?? 0);
 
   const exists = new Set(classes.map((c) => c.id));
 
@@ -591,7 +650,21 @@ const classOverview = async () => {
     topLevelLabel: topLevelRow ? topLevelRow.name : String(topGrade),
     topGradeBasis: basis,
     classes: classes.map((c) => {
-      const isTop = orderOf(c) === topGrade;
+      /* AT OR ABOVE the deciding top — not merely equal to it. The write guard
+         refuses `sourceOrder >= topOrder` (`resolveTargetClass` below), so a
+         class on a level ABOVE the stored final has to read the same way here.
+         With `===` this screen offered a Promote (and a target class) that the
+         server then refused with CLASS_IS_TOP — the exact drift the stored final
+         class exists to end, in the shape policy (B) makes normal: a school marks
+         Class 10 final and still plans Class 11 above it.
+
+         `topGrade` is never null on this path (`?? 0` above), but the null test is
+         written out so the comparison cannot silently become "everything is top"
+         if that default ever changes. */
+      const isTop = topGrade !== null && orderOf(c) >= topGrade;
+      /* STRICTLY above, so the screens can say "this class sits above your final
+         class" rather than calling it the final class itself. */
+      const isAboveFinal = topGrade !== null && orderOf(c) > topGrade;
       // The next class is the next LEVEL in the order, with the same section —
       // never grade + 1, which a level inserted above would make wrong.
       const nextLevel = chains.get(c.id) || null;
@@ -610,6 +683,7 @@ const classOverview = async () => {
         handledCount: handledByClass.get(c.id) || 0,
         remainingCount: (registerByClass.get(c.id) || 0) - (handledByClass.get(c.id) || 0),
         isTop,
+        isAboveFinal,
         // 'passed_out' on the top grade, 'promote' below it, 'none' when there is
         // nothing to move — an empty class cannot be promoted or graduated, and
         // offering either would promise a result the transaction could not deliver.
@@ -926,6 +1000,23 @@ const promotionOptions = async ({ studentId = null, classId = null } = {}) => {
      agree. */
   const suggestedYear = allowedYears[0] || null;
 
+  /* Which level graduates, so the popup can warn when a child is moved PAST it.
+     The stored final class wins when set; otherwise the shared derived top (the
+     same answer the overview shows). Read here rather than in the modal, so the
+     screen cannot invent its own idea of "final".
+
+     Read BEFORE the suggested class, because the suggestion depends on it — see
+     `suggestedClass` below. */
+  const finalRow = await classesService.finalLevel();
+  const topOrder = finalRow ? finalRow.order : await derivedTopOrder();
+  const finalLevel = finalRow
+    ? { id: finalRow.id, name: finalRow.name, order: finalRow.order }
+    : null;
+  // Compared on the LEVEL ORDER, like every other surface: a class whose level is
+  // unlinked falls back to `grade`, which holds the same order.
+  const sourceOrder = source.level ? source.level.order : source.grade;
+  const sourceAtOrAboveTop = topOrder !== null && sourceOrder >= topOrder;
+
   // The suggested next class, in the LEVEL CHAIN (preview only: `create: false`
   // resolves the id without writing it).
   const nextTarget = await classesService.nextClassFor(source.id, { create: false });
@@ -935,24 +1026,48 @@ const promotionOptions = async ({ studentId = null, classId = null } = {}) => {
     orderBy: [{ grade: 'asc' }, { section: 'asc' }],
     include: { level: true },
   });
-  const realClasses = classes.map((c) => ({
-    id: c.id,
-    grade: c.grade,
-    section: c.section,
-    order: c.level ? c.level.order : c.grade,
-    levelId: c.levelId,
-    levelName: c.level ? c.level.name : null,
-    label: classLabel(c),
-  }));
+
+  /* `order > topOrder` is the whole "above" test — the final class is not above
+     itself. Nothing is filtered out on the strength of it: the explicit path stays
+     available, it is simply made visible. */
+  const realClasses = classes.map((c) => {
+    const order = c.level ? c.level.order : c.grade;
+    return {
+      id: c.id,
+      grade: c.grade,
+      section: c.section,
+      order,
+      levelId: c.levelId,
+      levelName: c.level ? c.level.name : null,
+      label: classLabel(c),
+      // Strictly ABOVE the final year — not equal to it. The final class itself
+      // is the graduate, not "past" anything.
+      aboveFinal: topOrder !== null && order > topOrder,
+    };
+  });
+  const ownClass = realClasses.find((c) => c.id === source.id) || null;
 
   return {
     student: subject,
     currentYear: { id: from.id, label: from.label },
-    currentClass: realClasses.find((c) => c.id === source.id) || null,
+    currentClass: ownClass,
+    /* The final year, so the popup can name it in the warning. Null when the
+       school has not set one: the derived answer is still used for `aboveFinal`
+       above, but there is no stored name to print. */
+    finalLevel,
     suggestedYear,
-    suggestedClass: nextTarget
-      ? { id: nextTarget.classId, label: nextTarget.label, willBeCreated: nextTarget.willBeCreated }
-      : null,
+    /* The DEFAULT the popup preselects. A student already at or above the final
+       class is never defaulted into a class beyond it: the server answers with the
+       student's own class, which the modal shows as "stay in the same class". The
+       above-final class stays reachable in the dropdown, with its warning — the
+       admin must choose it. Without this, marking Class 10 final while an empty
+       Class 11 exists left the dialog one click from moving a child past
+       graduation. */
+    suggestedClass: sourceAtOrAboveTop
+      ? (ownClass && { id: ownClass.id, label: ownClass.label, willBeCreated: false })
+      : nextTarget
+        ? { id: nextTarget.classId, label: nextTarget.label, willBeCreated: nextTarget.willBeCreated }
+        : null,
     allowedYears,
     classes: realClasses,
   };
@@ -1161,18 +1276,52 @@ const resolveTargetClass = async (db, { source, action, toClassId }) => {
     };
   }
 
+  /* The top class graduates; it must not be auto-promoted. This is the ONE guard
+     for BOTH write paths — the whole-class promote and the single-student move
+     both resolve their target here, so neither can drift from the other.
+
+     An EXPLICITLY chosen class stays exempt: if the admin picked a real class,
+     that is a deliberate instruction (a school that runs Class 11 on purpose, or
+     a repeat), not the automatic "next level up" this exists to stop. A chosen
+     class ABOVE the final is allowed for exactly that reason — it is the visible,
+     intentional path (the popup warns before it is used).
+
+     ## Which classes are "top"
+
+     The STORED final class always wins when the office has set one. Only when
+     nothing is stored does `derivedTopOrder()` answer — the SAME function the
+     overview uses, so the write path and the screen cannot disagree.
+
+     ## The legacy behaviour this changes
+
+     With no flag set and a populated 10-A beside an EMPTY 11-A, the OLD promote
+     guard compared `source.grade` against the table-wide max grade (11), so
+     `10 >= 11` was FALSE and the move was PERMITTED: the children were auto-moved
+     into an empty Class 11-A that nobody teaches, while the overview said 10-A
+     graduates. The shared derived top (the highest level WITH STUDENTS, so 10)
+     now refuses it as CLASS_IS_TOP. That is a deliberate change — the old
+     behaviour was permissive, not strict, and permissive was the bug. */
+  if (action === 'promote' && !toClassId) {
+    const sourceOrder = source.level ? source.level.order : source.grade;
+    const storedFinal = await classesService.finalLevel(db);
+    const topOrder = storedFinal ? storedFinal.order : await derivedTopOrder(db);
+    if (topOrder !== null && sourceOrder >= topOrder) {
+      throw Object.assign(
+        new Error(`${classLabel(source)} is the highest class in the school — mark it as passed out instead of promoting it`),
+        { code: 'CLASS_IS_TOP' },
+      );
+    }
+  }
+
   const target = await classesService.nextClassFor(source.id, { client: db });
   if (!target) {
     /* The top level graduates; a level with no successor needs one added first.
-       Two different situations, so the admin is told which one. */
-    const highestLevel = await db.gradeLevel.findFirst({ orderBy: { order: 'desc' } });
-    const atTop = Boolean(highestLevel)
-      && (source.level ? source.level.order : source.grade) >= highestLevel.order;
+       Two different situations, so the admin is told which one. The guard above
+       already refused the at-top case, so reaching here means the level genuinely
+       has nowhere to go. */
     throw Object.assign(
-      new Error(atTop
-        ? `${classLabel(source)} is the highest class in the school - mark it as passed out instead`
-        : `${classLabel(source)} has no next level to promote into. Add the next level in Class Management first.`),
-      { code: atTop ? 'CLASS_IS_TOP' : 'NO_NEXT_LEVEL' },
+      new Error(`${classLabel(source)} has no next level to promote into. Add the next level in Class Management first.`),
+      { code: 'NO_NEXT_LEVEL' },
     );
   }
   return target;
@@ -1258,22 +1407,22 @@ const promoteClass = async ({ classId, exclude = [], confirm = [], toAcademicYea
       );
     }
 
-    /* The top class graduates; it must not be auto-promoted. Checked here rather
-       than only in the UI, so a stale client cannot promote the graduating class
-       into a grade the school does not run. An EXPLICITLY chosen class is exempt:
-       if the admin picked a real class to move them into, that is a deliberate
-       instruction (a school that runs Class 11, or a repeat), not the automatic
-       "grade + 1" this guard exists to stop. */
-    if (!toClassId) {
-      const maxGrade = (await tx.class.findMany({ select: { grade: true } }))
-        .reduce((max, c) => Math.max(max, c.grade), 0);
-      if (source.grade >= maxGrade) {
-        throw Object.assign(
-          new Error(`${classLabel(source)} is the highest class in the school — mark it as passed out instead of promoting it`),
-          { code: 'CLASS_IS_TOP' },
-        );
-      }
-    }
+    /* The top class graduates; it must not be auto-promoted. The REAL check now
+       lives in `resolveTargetClass`, called below, which both write paths share —
+       so there is one rule and it cannot drift. This block is NOT a second check:
+       it is a plain-language explanation left at the call site for the reader, and
+       the resolver is the authority. Do not re-add a comparison here.
+
+       ## What used to be wrong
+
+       This block used to compare `source.grade` against the maximum grade over ALL
+       classes, empty ones included. With a populated 10-A and an EMPTY 11-A that
+       made `10 >= 11` FALSE, so it did NOT throw — and the promotion then created
+       or found 11-A and moved the children into a class nobody teaches, while the
+       overview reported that 10-A graduates. The bug was PERMISSIVENESS, not a
+       false refusal: the guard let through a move the school had not opened a
+       class for. The shared `resolveTargetClass` guard (stored final class, else
+       the highest level WITH STUDENTS) now refuses it. */
 
     /* Nothing flagged may pass unconfirmed. Named individually, because "3 students
        need review" sends the admin hunting through a list they already scrolled
@@ -1575,9 +1724,24 @@ const classPromotionRoster = async ({ classId }) => {
      a PREVIEW: `create: false` resolves the destination id without writing it, so
      opening — and then cancelling — a review cannot leave an orphan class behind
      (QA-A1-017). The class is created only when the promotion is confirmed. */
+  /* The source class's own level order, not its grade column. The overview reports
+     `topGrade` as a LEVEL ORDER; comparing against `source.grade` happened to
+     agree only while every class's level was linked, and would silently disagree
+     for an unlinked one. Comparing like with like is what lets the roster, the
+     overview and the promotion guard all name the same graduating class. */
   const nextTarget = await classesService.nextClassFor(classId, { create: false });
-  const isTop = source.grade === overview.topGrade;
+  const sourceOrder = source.level ? source.level.order : source.grade;
+  /* Same `>=` the overview and the write guard use. A class above the final class
+     is not promotable: the guard refuses with CLASS_IS_TOP, so the roster must not
+     show a Promote button for it. `===` here left the screen offering an action the
+     server would reject. */
+  const isTop = overview.topGrade !== null && sourceOrder >= overview.topGrade;
+  const isAboveFinal = overview.topGrade !== null && sourceOrder > overview.topGrade;
   const noNextLevel = !nextTarget && !isTop;
+  /* A level that has no successor but is NOT the final class: the school's last
+     level is not marked final, so the admin is told to add the next level or set
+     the final class rather than being told the school simply ends there. */
+  const isLastLevel = !nextTarget;
   const seats = await prisma.studentEnrollment.findMany({
     where: { academicYearId: from.id, classId },
     include: {
@@ -1671,6 +1835,7 @@ const classPromotionRoster = async ({ classId }) => {
     levelId: source.levelId,
     levelName: source.level ? source.level.name : null,
     isTop,
+    isAboveFinal,
     fromAcademicYear: from,
     toAcademicYear: to,
     targetClass: isTop || !nextTarget ? null : nextTarget,
@@ -1682,6 +1847,11 @@ const classPromotionRoster = async ({ classId }) => {
     noNextLevel,
     noNextLevelReason: isTop ? 'top' : (noNextLevel ? 'no_next_level' : null),
     students,
+    /* Whether this class sits on the school's LAST level at all (successor or not).
+       The screen needs it to tell the two refusals apart: "this is your final
+       class" versus "this is your last level but it is not marked as the final
+       class — add the next level, or set the final class". */
+    isLastLevel,
   };
 };
 
@@ -2410,6 +2580,7 @@ module.exports = {
   nextYearAfter,
   // structure
   classOverview,
+  derivedTopOrder,
   classesForYear,
   rosterFor,
   syncLiveEnrollment,

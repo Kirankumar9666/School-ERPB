@@ -37,7 +37,7 @@ test('admin attendance group + bulk confirm: atomic save, edit window, RBAC', as
     const res = await getGroup({ kind: 'student', groupKey: class10A.id, date: today, session: 'FN' });
     assert.equal(res.status, 200);
     const g = res.body.data;
-    assert.equal(g.label, '10 - Class A'); // derived from grade/section, not a stored string
+    assert.equal(g.label, 'Class 10A'); // the shared classLabel, not a hand-built string
     assert.equal(g.count, g.members.length);
     assert.ok(g.count > 0);
     assert.ok(g.members.every((m) => m.rollNumber && m.name)); // real roster fields

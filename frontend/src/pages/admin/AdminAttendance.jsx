@@ -110,7 +110,7 @@ export default function AdminAttendance() {
           nouns={tab === 'student'
             ? { group: 'class', groups: 'classes', members: 'students', member: 'student', check: 'Check student' }
             : { group: 'employee', groups: 'employees', members: 'employees', member: 'employee', check: 'Check record' }}
-          searchPlaceholder={tab === 'student' ? 'Search class, e.g. 10 - A' : 'Search employee by name…'}
+          searchPlaceholder={tab === 'student' ? 'Search class, e.g. Class 10A' : 'Search employee by name…'}
         />
       )}
     </div>

@@ -57,8 +57,11 @@ export default function PromoteStudentModal({ student, onClose, onDone }) {
         if (!alive) return;
         const data = res.data.data;
         setOptions(data);
-        // Default to the class the server suggests — for a top class that is the
-        // student's own class, which correctly reads as "stay back".
+        // Default to the class the server suggests. The server never suggests a
+        // class ABOVE the final class: for a student at or above it, the
+        // suggestion is the student's own class, which reads as "stay back". An
+        // above-final class is still offered in the dropdown, so choosing it is a
+        // deliberate act and not merely the default.
         setSelectedClassId(data.suggestedClass?.id ?? data.currentClass?.id ?? null);
       } catch (err) {
         if (!alive) return;
@@ -87,6 +90,12 @@ export default function PromoteStudentModal({ student, onClose, onDone }) {
   const chosen = choices.find((c) => c.id === selectedClassId) || null;
   const staying = Boolean(chosen && currentClass && chosen.id === currentClass.id);
   const nextYearLabel = suggestedYear?.label ?? null;
+  /* The chosen class is past the school's final year. `aboveFinal` comes from the
+     server (the same stored final class / derived top the whole app uses), so the
+     warning cannot disagree with what the move will actually do. Nothing is
+     blocked — this is the deliberate path — but the admin must see it. */
+  const chosenAboveFinal = Boolean(chosen?.aboveFinal) && !staying;
+  const finalLevel = options?.finalLevel ?? null;
 
   /* One sentence, in the two shapes the office reads out loud. */
   const summary = (() => {
@@ -202,6 +211,21 @@ export default function PromoteStudentModal({ student, onClose, onDone }) {
             <div className="att-note" style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-sm)' }}>
               <ArrowRight size={14} />
               <span>{summary}</span>
+            </div>
+          )}
+
+          {chosenAboveFinal && (
+            /* A deliberate path, not a refusal: the server allows an explicitly
+               chosen class above the final year, so the admin is warned here rather
+               than stopped. They are moving a child PAST the school's final year. */
+            <div className="att-note locked" style={{ marginTop: 'var(--sp-md)' }}>
+              <TriangleAlert size={14} />
+              <div>
+                <strong>{chosen.label}</strong> is above your final class
+                {finalLevel ? <> <strong>{finalLevel.name}</strong></> : ' level'} — this
+                moves {student.name} past the school's final year. Continue only if that
+                is intended.
+              </div>
             </div>
           )}
 

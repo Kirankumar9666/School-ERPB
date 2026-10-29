@@ -52,16 +52,3 @@ export const classChoices = (keys, classes) => {
       return ka !== kb ? ka - kb : sa.localeCompare(sb);
     });
 };
-
-/**
- * Display name for a class record, wherever one is already in hand.
- * Mirrors the server's `classLabel` — a numbered level reads "Class 10A" and a
- * named one "Nursery A". Used by the screens that hold a class object rather
- * than an option from the dropdown.
- */
-export const displayClassLabel = ({ level, grade, section } = {}) => {
-  if (!section) return null;
-  const name = level ? level.name : (grade === null || grade === undefined ? null : String(grade));
-  if (name === null) return `Class ${section}`;
-  return /^\d+$/.test(name) ? `Class ${name}${section}` : `${name} ${section}`;
-};

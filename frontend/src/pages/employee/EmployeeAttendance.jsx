@@ -157,7 +157,7 @@ function TeacherMarkAttendance() {
       groups={classes}
       apiBase={`/employees/${employeeId}`}
       nouns={{ group: 'class', groups: 'classes', members: 'students' }}
-      searchPlaceholder="Search class, e.g. 10 - A"
+      searchPlaceholder="Search class, e.g. Class 10A"
     />
   );
 }

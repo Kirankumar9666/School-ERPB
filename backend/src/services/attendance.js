@@ -14,7 +14,7 @@
 const { z } = require('zod');
 const { AttendanceStatus } = require('@prisma/client');
 const prisma = require('./prisma');
-const { statusToApi, statusToDb, toIso } = require('./mappers');
+const { statusToApi, statusToDb, toIso, classLabel } = require('./mappers');
 const {
   teacherTimetableClasses,
   teacherTeachesClass: teacherTimetableTeachesClass,
@@ -69,6 +69,11 @@ const attendanceGroup = async (kind, groupKey, date) => {
     const klass = await prisma.class.findUnique({
       where: { id: groupKey },
       include: {
+        // The level, so the shared label prints the LEVEL NAME: 'Class 10A' for a
+        // numbered level, 'Nursery A' for a named one. Without it the fallback
+        // would read `Class.grade`, which holds the level ORDER — and LKG (order
+        // -1) would print as "-1 A". See mappers.classLabel / classLabelFor.
+        level: true,
         students: {
           // Enrollment gate — inclusive: enrolled on the requested day = listed.
           where: date ? { enrolledAt: { lte: parseDateOnlyOrThrow(date) } } : undefined,
@@ -77,7 +82,10 @@ const attendanceGroup = async (kind, groupKey, date) => {
       },
     });
     if (!klass) return null;
-    return { label: `${klass.grade} - Class ${klass.section}`, members: klass.students };
+    /* The ONE shared class-name rule. This was the last hand-built label in the
+       backend (`${klass.grade} - Class ${klass.section}` → "10 - Class A"), and it
+       bypassed the function every other surface uses. */
+    return { label: classLabel(klass), members: klass.students };
   }
   /* An employee id first: a person IS their own group. */
   const person = await prisma.employee.findUnique({ where: { id: groupKey } });

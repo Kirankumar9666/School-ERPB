@@ -179,7 +179,7 @@ router.get('/options', async (req, res) => {
   return sendSuccess(res, {
     enums: enumOptions(),
     classes,
-    levels: levels.map((l) => ({ id: l.id, name: l.name, order: l.order })),
+    levels: levels.map((l) => ({ id: l.id, name: l.name, order: l.order, isFinal: l.isFinal })),
     weeklyOffDays,
   });
 });
