@@ -341,8 +341,11 @@ export default function ClassManagementPromote() {
         <div style={{ marginTop: 4 }}>
           {finalIsSet ? (
             <span>
-              Your final class is <strong>{finalName}</strong> — students in this class
-              {' '}graduate instead of moving up.
+              {/* A final class is a LEVEL, so "every section of it" — not
+                  "students in this class" — is the same claim the roster makes
+                  below. The two read as one sentence about one level. */}
+              Your final class is <strong>{finalName}</strong> — every section
+              {' '}of it graduates rather than moves up.
               {' '}
               <button
                 type="button"
