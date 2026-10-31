@@ -629,6 +629,35 @@ const classOverview = async () => {
     }
   }
 
+  /* What "Graduate the whole class" will actually act on. This is the SAME filter
+     `passOutClass` applies at write time: everyone pointing at the class whose
+     newest active seat is not in a LATER year — plus anyone with no seat at all.
+
+     `registerCount` cannot answer it: a kept-back child keeps this year's row as
+     history AND gains a target-year row, so they count as a seat in the register
+     while no longer being part of the graduating batch. Counting the pointer
+     instead made the confirmation say "All 2 students" for a class where the
+     button would graduate 1 — the over-count that hid the kept-back child. */
+  const passOutByClass = new Map();
+  const heldStudents = await prisma.student.findMany({
+    where: { classId: { not: null } },
+    select: {
+      classId: true,
+      enrollments: {
+        where: { status: 'active' },
+        orderBy: { academicYear: { startDate: 'desc' } },
+        take: 1,
+        select: { academicYear: { select: { startDate: true } } },
+      },
+    },
+  });
+  for (const s of heldStudents) {
+    const seat = s.enrollments[0];
+    if (!seat || seat.academicYear.startDate <= year.startDate) {
+      passOutByClass.set(s.classId, (passOutByClass.get(s.classId) || 0) + 1);
+    }
+  }
+
   /* The chain, resolved once per class. Read inside the same read path rather than
      cached: one query per class on a 13-row table, which is cheaper than an
      invalidation. */
@@ -682,6 +711,8 @@ const classOverview = async () => {
         registerCount: registerByClass.get(c.id) || 0,
         handledCount: handledByClass.get(c.id) || 0,
         remainingCount: (registerByClass.get(c.id) || 0) - (handledByClass.get(c.id) || 0),
+        // The graduating batch — what the whole-class button will act on.
+        passOutCount: passOutByClass.get(c.id) || 0,
         isTop,
         isAboveFinal,
         // 'passed_out' on the top grade, 'promote' below it, 'none' when there is
@@ -1576,13 +1607,34 @@ const passOutClass = async ({ classId }) => prisma.$transaction(async (tx) => {
      first pass promoted them. `liveStudentsOf` follows the same pointer the
      headcount does, which is what makes this repeatable without consequence. */
   const batch = await liveStudentsOf(classId, tx);
-  if (!batch.length) {
-    throw Object.assign(new Error(`${classLabel(source)} has no students to pass out`), { code: 'NOTHING_TO_PASS_OUT' });
+
+  /* ...but the POINTER alone is not the graduating batch. A child the office kept
+     back to repeat the year still points at this class (that is what "keep back in
+     the same class" means) while their newest active seat already belongs to the
+     NEXT year. Graduating the pointer would flip that next-year seat to
+     `passed_out` and clear the class pointer — undoing a decision the office made
+     on purpose, for the one child they chose to retain.
+
+     This is the same cycle filter `promoteClass` applies (see the comment there):
+     a seat in a LATER year is proof the child was already handled this cycle.
+     Seats from an earlier year, and students with no seat at all, stay in — they
+     hold no later year to contradict the pointer, and excluding them would leave
+     them stuck on a class the screen no longer offers to graduate. */
+  const sourceYear = await currentYear(tx);
+  if (!sourceYear) throw Object.assign(new Error('No academic year contains today'), { code: 'NO_CURRENT_YEAR' });
+  const graduating = batch.filter(({ seat }) => (
+    !seat || seat.academicYear.startDate <= sourceYear.startDate
+  ));
+  if (!graduating.length) {
+    throw Object.assign(
+      new Error(`${classLabel(source)} has no students left to pass out — every student has already been moved this cycle`),
+      { code: 'NOTHING_TO_PASS_OUT' },
+    );
   }
 
   const passedOut = [];
   const passedOutAt = new Date();
-  for (const { student, seat } of batch) {
+  for (const { student, seat } of graduating) {
     /* The seat ends at the end of the year it was for, not at the end of the year
        the button was pressed — the child sat that class for that whole year, and
        the calendar is the only thing that knows when it ended. `passedOutAt` is

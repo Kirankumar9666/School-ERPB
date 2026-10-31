@@ -774,3 +774,73 @@ test('F3: promotion-options never defaults a student at/above the final into a c
 
   await clearFinal();
 });
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Bulk graduation must respect decisions already made this cycle
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* A child kept back to repeat the year still holds the class pointer — that is
+   what "keep back in the same class" means — but their newest active seat is in
+   the NEXT year. `passOutClass` used to graduate every pointer, so the one child
+   the office deliberately retained had their new seat flipped to `passed_out`
+   and their class cleared: the bulk button silently undid a human decision.
+
+   This pins both halves of the fix: the write skips later-year seats, and the
+   confirmation counts the same batch (`passOutCount`) instead of the headcount. */
+test('bulk graduation: a child already kept back for the new year is left alone', async () => {
+  await refreshLevels();
+  const ordered = [...levels].sort((a, b) => a.order - b.order);
+  const finalLevel = ordered[ordered.length - 1];
+  await setFinal(finalLevel.id);
+
+  const cls = await makeClass(finalLevel.id);
+  const repeater = await makeStudent(cls.id, 'Kept Back Child');
+  const leaver = await makeStudent(cls.id, 'Graduating Child');
+
+  const before = await overview();
+  const yearId = before.currentAcademicYear.id;
+  const beforeClass = before.classes.find((c) => c.id === cls.id);
+  assert.equal(beforeClass.studentCount, 2);
+  assert.equal(beforeClass.passOutCount, 2, 'both children start in the graduating batch');
+
+  const keep = await post(`/admin/class-management/students/${repeater.id}/move`, { action: 'keep' });
+  assert.equal(keep.status, 200, JSON.stringify(keep.body));
+
+  const afterKeep = (await overview()).classes.find((c) => c.id === cls.id);
+  assert.equal(afterKeep.studentCount, 2, 'the repeater still points at the class — that is the point of keeping them');
+  assert.equal(afterKeep.remainingCount, 1);
+  assert.equal(
+    afterKeep.passOutCount,
+    1,
+    'the confirmation must count only the child still to decide, not the whole class',
+  );
+
+  const out = await post(`/admin/class-management/classes/${cls.id}/pass-out`, {});
+  assert.equal(out.status, 200, `bulk graduation should succeed: ${JSON.stringify(out.body)}`);
+  assert.equal(out.body.data.passedOutCount, 1, 'exactly one child graduates');
+  assert.equal(out.body.data.students[0].studentId, leaver.id, 'and it is the one who was still to decide');
+
+  const prisma = require('../src/services/prisma');
+
+  // The graduate: no current class, and this year's seat is closed.
+  const grad = await prisma.student.findUnique({ where: { id: leaver.id } });
+  assert.equal(grad.classId, null);
+  const gradSeat = await prisma.studentEnrollment.findFirst({
+    where: { studentId: leaver.id, academicYearId: yearId },
+  });
+  if (gradSeat) assert.equal(gradSeat.status, 'passed_out');
+
+  // The repeater: pointer untouched, and their next-year seat is still open.
+  const kept = await prisma.student.findUnique({ where: { id: repeater.id } });
+  assert.equal(kept.classId, cls.id, 'the kept-back child must keep their class');
+  const keptSeats = await prisma.studentEnrollment.findMany({
+    where: { studentId: repeater.id, status: 'active' },
+  });
+  assert.equal(keptSeats.length, 1, 'the repeated year stays active');
+  assert.equal(keptSeats[0].classId, cls.id);
+
+  // And the class is not left offering a button that would graduate nobody.
+  const end = (await overview()).classes.find((c) => c.id === cls.id);
+  assert.equal(end.passOutCount, 0);
+  await clearFinal();
+});

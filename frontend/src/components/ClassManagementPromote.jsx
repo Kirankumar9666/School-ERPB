@@ -403,14 +403,22 @@ export default function ClassManagementPromote() {
               {/* The register count is this year's seats — a student moved
                   individually keeps their seat, so it does not fall when they
                   leave. "Remaining" is what still has to be decided, which is
-                  the number the whole-class button will act on. */}
+                  the number the whole-class button will act on.
+
+                  A GRADUATING class is counted from `passOutCount` + `handledCount`
+                  instead, because its register keeps the row of a child who has
+                  already graduated. Counting the register made the card say
+                  "1 of 2 still to decide" after both children had been decided —
+                  and a kept-back child was counted as still to decide on the
+                  very card whose button would have graduated them. */}
               {c.registerCount > 0 && (
                 <div className="text-sm text-muted" style={{ marginTop: 'var(--sp-xs)' }}>
                   {/* "Move" is the wrong verb for a class that graduates: its
                       students are not being moved anywhere. What is still
                       outstanding is a decision — pass out or keep back. */}
-                  {c.remainingCount} of {c.registerCount}{' '}
-                  {c.action === 'promote' ? 'still to move' : 'still to decide'}
+                  {c.action === 'promote'
+                    ? <>{c.remainingCount} of {c.registerCount} still to move</>
+                    : <>{c.passOutCount} of {c.passOutCount + c.handledCount} still to decide</>}
                   {c.handledCount > 0 && ` · ${c.handledCount} already handled`}
                 </div>
               )}
@@ -432,7 +440,10 @@ export default function ClassManagementPromote() {
                     type="button"
                     className="btn btn-danger btn-sm"
                     onClick={() => setPending({ mode: 'passout', cls: c })}
-                    disabled={busy}
+                    disabled={busy || c.passOutCount === 0}
+                    title={c.passOutCount === 0
+                      ? 'Every student in this class has already been moved or kept back for the new year'
+                      : undefined}
                     style={{ flex: 1 }}
                   >
                     {/* Year-end for a final class is graduation, not an exception:
@@ -537,29 +548,42 @@ export default function ClassManagementPromote() {
           title={pending.cls.noNextLevelReason === 'no_next_level'
             ? `Pass out ${pending.cls.label}?`
             : `Graduate ${pending.cls.label}?`}
+          /* The batch, not the headcount: a child already kept back still points at
+             this class but is not part of this action. `passOutCount` comes from the
+             server with the same filter the write uses, so the sentence and the
+             button cannot promise a child it will not touch. */
           confirmLabel={pending.cls.noNextLevelReason === 'no_next_level'
-            ? `Pass out ${pending.cls.studentCount} student${pending.cls.studentCount === 1 ? '' : 's'}`
-            : `Graduate ${pending.cls.studentCount} student${pending.cls.studentCount === 1 ? '' : 's'}`}
+            ? `Pass out ${pending.cls.passOutCount} student${pending.cls.passOutCount === 1 ? '' : 's'}`
+            : `Graduate ${pending.cls.passOutCount} student${pending.cls.passOutCount === 1 ? '' : 's'}`}
           onClose={closePending}
           onConfirm={() => runPassOut(pending.cls)}
           busy={busy}
         >
           <p>
-            All <strong>{pending.cls.studentCount}</strong> student
-            {pending.cls.studentCount === 1 ? '' : 's'} of {pending.cls.label} will
+            <strong>{pending.cls.passOutCount}</strong> student
+            {pending.cls.passOutCount === 1 ? '' : 's'} of {pending.cls.label} will
             {pending.cls.noNextLevelReason === 'no_next_level'
               ? ' leave the school as '
               : ' graduate from the school and become '}
             <strong>alumni</strong>.
           </p>
+          {pending.cls.passOutCount < pending.cls.studentCount && (
+            <p className="confirm-note">
+              {pending.cls.studentCount - pending.cls.passOutCount === 1
+                ? '1 student in this class has'
+                : `${pending.cls.studentCount - pending.cls.passOutCount} students in this class have`}
+              {' '}already been moved or kept back for the new year and will not be touched.
+            </p>
+          )}
           <ul className="confirm-list">
             <li>
               Nothing is deleted. Every year they attended — their attendance, marks and
               fees — stays saved and stays readable in Class History.
             </li>
             <li>
-              {pending.cls.label} becomes empty, ready for the students promoted into it
-              from the class below.
+              {pending.cls.passOutCount === pending.cls.studentCount
+                ? `${pending.cls.label} becomes empty, ready for the students promoted into it from the class below.`
+                : `${pending.cls.label} is not emptied: the student already decided for the new year stays in it.`}
             </li>
             <li>
               They stop appearing on any current register, headcount or class list in the
@@ -571,7 +595,8 @@ export default function ClassManagementPromote() {
                   kept back first — graduating them by mistake can only be undone
                   while the new year is still empty. */}
               If any child failed and should repeat the year, cancel this and keep that
-              child back from the student list first — this button graduates everyone.
+              child back from the student list first — this button graduates every child
+              still to decide.
             </li>
           </ul>
           <p className="confirm-note">
