@@ -36,8 +36,19 @@ import api from '../services/api';
  * Choosing the student's own class means "repeat the year", which is a different
  * server action (`keep`) from moving up (`promote`). The popup picks the right one
  * from the choice, so the admin never has to know the two names.
+ *
+ * ## `mode` — the word on the door, not the logic
+ *
+ * On a class with a next level the popup is reached from "Promote" and speaks of
+ * promotion. On the final class it is reached from "Keep back": graduating is the
+ * normal year-end there, so repeating is the exception and the popup must say so
+ * rather than promise a move the server will refuse. `mode` changes the title, the
+ * dropdown label and the own-class option — the options, the request and the
+ * server action are identical either way.
  */
-export default function PromoteStudentModal({ student, onClose, onDone }) {
+export default function PromoteStudentModal({ student, mode = 'promote', onClose, onDone }) {
+  /* Graduating class: "keep back" is the exception this popup is here for. */
+  const keeping = mode === 'keep';
   const [options, setOptions] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -102,7 +113,9 @@ export default function PromoteStudentModal({ student, onClose, onDone }) {
     if (!chosen || !currentClass || !nextYearLabel) return null;
     const from = `${currentClass.label} (${options.currentYear.label})`;
     if (staying) {
-      return `${student.name} will stay in ${currentClass.label} for ${nextYearLabel}.`;
+      return keeping
+        ? `${student.name} will stay in ${currentClass.label} and repeat the year (${nextYearLabel}).`
+        : `${student.name} will stay in ${currentClass.label} for ${nextYearLabel}.`;
     }
     return `${student.name} will move from ${from} to ${chosen.label} (${nextYearLabel}).`;
   })();
@@ -137,7 +150,7 @@ export default function PromoteStudentModal({ student, onClose, onDone }) {
   return (
     <Modal
       stacked
-      title={`Promote ${student.name}`}
+      title={keeping ? `Keep back or move ${student.name}` : `Promote ${student.name}`}
       onClose={() => { if (!saving) onClose(); }}
       footer={(
         <>
@@ -188,10 +201,13 @@ export default function PromoteStudentModal({ student, onClose, onDone }) {
             </div>
           </div>
 
-          {/* The class. The student's own class is labelled as "stay", because
-              picking it is not a promotion — it is a repeat. */}
+          {/* The class. The student's own class is labelled as "stay" (or "keep
+              back" on a final class), because picking it is not a promotion — it
+              is a repeat. */}
           <div className="form-group">
-            <label className="form-label" htmlFor="promote-student-class">Promote to class</label>
+            <label className="form-label" htmlFor="promote-student-class">
+              {keeping ? 'Class next year' : 'Promote to class'}
+            </label>
             <select
               id="promote-student-class"
               className="form-input"
@@ -201,7 +217,11 @@ export default function PromoteStudentModal({ student, onClose, onDone }) {
             >
               {choices.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.id === currentClass?.id ? `${c.label} (stay in the same class)` : c.label}
+                  {c.id === currentClass?.id
+                    ? (keeping
+                      ? `${c.label} (keep back and repeat the year)`
+                      : `${c.label} (stay in the same class)`)
+                    : c.label}
                 </option>
               ))}
             </select>

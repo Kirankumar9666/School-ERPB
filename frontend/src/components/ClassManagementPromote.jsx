@@ -189,10 +189,11 @@ export default function ClassManagementPromote() {
      the escape hatch for the exceptions — a child who repeats the year, one who
      leaves mid-year, or a single promotion worked out one person at a time. It
      reads the class's CURRENT-YEAR register (so a student already moved still
-     shows, badged) and each row offers ONE "Promote" button, which opens a popup
-     asking which class the child goes to. Both answers the popup can give go
-     through the same service, and the same fee rollover, as the whole-class
-     button. */
+     shows, badged) and each row offers the year-end action that class actually
+     has: "Promote" when the class has a next level, or "Pass Out" (primary) and
+     "Keep back" when it has none. Both open the same popup, which asks which
+     class the child goes to; its answer decides whether the move is a promote or
+     a repeat. */
   const [rosterFor, setRosterFor] = useState(null);
   const [roster, setRoster] = useState(null);
   const [rosterLoading, setRosterLoading] = useState(false);
@@ -205,6 +206,12 @@ export default function ClassManagementPromote() {
   const [changingFinal, setChangingFinal] = useState(false);
   const [levelOptions, setLevelOptions] = useState(null);
   const [finalBusy, setFinalBusy] = useState(false);
+
+  /* True for a register whose class has nowhere to move up to (the final class,
+     or one above it). Its normal year-end is graduation, so the row's primary
+     button passes the student out and the popup behind "Keep back" is the
+     repeat-the-year path. */
+  const rosterGraduates = Boolean(roster && !roster.targetClass);
 
   /** Open the popup, loading the level list it chooses from. */
   const openFinalPicker = useCallback(async () => {
@@ -399,7 +406,11 @@ export default function ClassManagementPromote() {
                   the number the whole-class button will act on. */}
               {c.registerCount > 0 && (
                 <div className="text-sm text-muted" style={{ marginTop: 'var(--sp-xs)' }}>
-                  {c.remainingCount} of {c.registerCount} still to move
+                  {/* "Move" is the wrong verb for a class that graduates: its
+                      students are not being moved anywhere. What is still
+                      outstanding is a decision — pass out or keep back. */}
+                  {c.remainingCount} of {c.registerCount}{' '}
+                  {c.action === 'promote' ? 'still to move' : 'still to decide'}
                   {c.handledCount > 0 && ` · ${c.handledCount} already handled`}
                 </div>
               )}
@@ -424,7 +435,19 @@ export default function ClassManagementPromote() {
                     disabled={busy}
                     style={{ flex: 1 }}
                   >
-                    Mark as Passed Out
+                    {/* Year-end for a final class is graduation, not an exception:
+                        the class has no next level, so passing out is what happens
+                        to everyone except the children the office deliberately
+                        keeps back. The word says that, the confirm button says
+                        "Graduate N students", and the red tone still warns that it
+                        cannot be undone from this screen.
+
+                        A class with no next level that is NOT marked final is a
+                        different claim — the office may simply not have added the
+                        next level yet — so it keeps the plainer word. */}
+                    {c.noNextLevelReason === 'no_next_level'
+                      ? 'Pass out the whole class'
+                      : 'Graduate the whole class'}
                   </button>
                 )}
                 <button
@@ -432,7 +455,9 @@ export default function ClassManagementPromote() {
                   className="btn btn-secondary btn-sm"
                   onClick={() => openRoster(c)}
                   disabled={rosterLoading || busy}
-                  title="Promote, keep or pass out individual students"
+                  title={c.action === 'promote'
+                    ? 'Promote, keep or pass out individual students'
+                    : 'Pass out, or keep back, individual students'}
                 >
                   <UserCog size={14} /> Students
                 </button>
@@ -455,7 +480,7 @@ export default function ClassManagementPromote() {
                      can add a level, and is told so. */
                   c.noNextLevelReason === 'no_next_level'
                     ? `no next level to promote into — add one with "Add level" on the Students page, or pass these students out`
-                    : 'these students leave the school'
+                    : 'these students graduate — open the student list to keep a child back'
                 )}
               </div>
             </div>
@@ -509,16 +534,23 @@ export default function ClassManagementPromote() {
 
       {pending?.mode === 'passout' && (
         <ConfirmModal
-          title={`Mark ${pending.cls.label} as passed out?`}
-          confirmLabel={`Graduate ${pending.cls.studentCount} student${pending.cls.studentCount === 1 ? '' : 's'}`}
+          title={pending.cls.noNextLevelReason === 'no_next_level'
+            ? `Pass out ${pending.cls.label}?`
+            : `Graduate ${pending.cls.label}?`}
+          confirmLabel={pending.cls.noNextLevelReason === 'no_next_level'
+            ? `Pass out ${pending.cls.studentCount} student${pending.cls.studentCount === 1 ? '' : 's'}`
+            : `Graduate ${pending.cls.studentCount} student${pending.cls.studentCount === 1 ? '' : 's'}`}
           onClose={closePending}
           onConfirm={() => runPassOut(pending.cls)}
           busy={busy}
         >
           <p>
             All <strong>{pending.cls.studentCount}</strong> student
-            {pending.cls.studentCount === 1 ? '' : 's'} of {pending.cls.label} will leave the
-            school as <strong>passed out / alumni</strong>.
+            {pending.cls.studentCount === 1 ? '' : 's'} of {pending.cls.label} will
+            {pending.cls.noNextLevelReason === 'no_next_level'
+              ? ' leave the school as '
+              : ' graduate from the school and become '}
+            <strong>alumni</strong>.
           </p>
           <ul className="confirm-list">
             <li>
@@ -533,10 +565,18 @@ export default function ClassManagementPromote() {
               They stop appearing on any current register, headcount or class list in the
               app, because no live class is held any more.
             </li>
+            <li>
+              {/* The deliberate exception, said before the button is pressed. The
+                  whole-class action cannot see who failed, so a repeater has to be
+                  kept back first — graduating them by mistake can only be undone
+                  while the new year is still empty. */}
+              If any child failed and should repeat the year, cancel this and keep that
+              child back from the student list first — this button graduates everyone.
+            </li>
           </ul>
           <p className="confirm-note">
-            {pending.cls.label} is the highest class in the school, so there is no class
-            above it to promote them into.
+            {pending.cls.label} is at the top of the school, so there is no class above it
+            to promote them into.
           </p>
         </ConfirmModal>
       )}
@@ -739,16 +779,18 @@ export default function ClassManagementPromote() {
                     ? `Each student can be promoted to a class you choose, or kept in ${roster.label} to repeat the year.`
                     : roster.isTop
                       ? roster.isAboveFinal
-                        ? `${roster.label} is above your final class${finalName ? ` (${finalName})` : ''}, so its students graduate rather than move up. Each row can be kept back to repeat the year, or passed out.`
+                        ? `${roster.label} is above your final class${finalName ? ` (${finalName})` : ''}, so its students graduate rather than move up. Each row can be passed out (graduated), or kept back to repeat the year.`
                         /* The final class is a LEVEL, so name the level and not this
                            section: two sections of the same final level must read
                            the same sentence ("Class 10A" is one section of Class 10).
                            And when no final class is set, the banner above already
                            says so, so the row cannot claim one — it states the
-                           fallback basis it is actually using instead. */
+                           fallback basis it is actually using instead.
+                           Graduation comes first because it is the normal year-end;
+                           keeping a child back is the exception the office chooses. */
                         : finalIsSet
-                          ? `Your final class is ${finalName} — every section of it graduates rather than moves up, so each row can be kept back to repeat the year, or passed out.`
-                          : `This is the top class, and no final class is set — its students graduate rather than move up, so each row can be kept back to repeat the year, or passed out. Set the final class on the Promote tab to make that official.`
+                          ? `Your final class is ${finalName} — every section of it graduates rather than moves up. Each row can be passed out (graduated), or kept back to repeat the year.`
+                          : `This is the top class, and no final class is set — its students graduate rather than move up. Each row can be passed out (graduated), or kept back to repeat the year. Set the final class on the Promote tab to make that official.`
                       : roster.isLastLevel
                         ? `${roster.label} is the last class level, so there is nothing to promote into. Set it as the final class on the Promote tab if its students graduate, or add the next level on the Students page.`
                         : `${roster.label} has no next level to promote into, so each student can be kept back or passed out. Add the next level on the Students page if the year is not really the last.`}
@@ -803,31 +845,49 @@ export default function ClassManagementPromote() {
                             )
                           ) : (
                             <div className="mk-actions" style={{ margin: 0 }}>
-                              {/* One button, always. It used to be a pair —
-                                  "Promote to 6A" and "Keep in 5A" — which made the
-                                  destination a fact computed elsewhere rather than a
-                                  choice. The popup asks which class, and picks the
-                                  right server action from the answer. A row where the
-                                  class simply has no successor (the top level) still
-                                  has something to offer: repeating the year is one of
-                                  the options inside, so the button is not hidden. */}
-                              <button
-                                type="button"
-                                className="btn btn-primary btn-sm"
-                                onClick={() => setPromoteStudent(s)}
-                                disabled={rowBusy === s.studentId}
-                              >
-                                Promote
-                              </button>
-                              {!roster.targetClass && (
+                              {/* Two shapes, because the two classes do different
+                                  things at year-end.
+
+                                  With a next level (Class 9B): "Promote" is the
+                                  normal action and the popup asks which class. Passing
+                                  out is not offered on the row — a class that has a
+                                  next level is not a graduating class.
+
+                                  Without one (the final class): graduation is what
+                                  happens to nearly everyone, so "Pass Out" is the
+                                  primary button. "Keep back" is the exception, and
+                                  opens the same popup, whose default is the student's
+                                  own class — a repeat. The popup picks the `keep`
+                                  action from that answer, so there is no second flow
+                                  to maintain. */}
+                              {roster.targetClass ? (
                                 <button
                                   type="button"
-                                  className="btn btn-danger btn-sm"
-                                  onClick={() => setPendingMove({ cls: rosterFor, student: s, action: 'pass_out' })}
+                                  className="btn btn-primary btn-sm"
+                                  onClick={() => setPromoteStudent(s)}
                                   disabled={rowBusy === s.studentId}
                                 >
-                                  Pass Out
+                                  Promote
                                 </button>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="btn btn-primary btn-sm"
+                                    onClick={() => setPendingMove({ cls: rosterFor, student: s, action: 'pass_out' })}
+                                    disabled={rowBusy === s.studentId}
+                                  >
+                                    Pass Out
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() => setPromoteStudent(s)}
+                                    disabled={rowBusy === s.studentId}
+                                  >
+                                    Keep back
+                                  </button>
+                                </>
                               )}
                             </div>
                           )}
@@ -880,6 +940,7 @@ export default function ClassManagementPromote() {
       {promoteStudent && (
         <PromoteStudentModal
           student={promoteStudent}
+          mode={rosterGraduates ? 'keep' : 'promote'}
           onClose={() => { if (!rowBusy) setPromoteStudent(null); }}
           onDone={finishPromote}
         />
