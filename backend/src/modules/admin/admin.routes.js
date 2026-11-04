@@ -1519,40 +1519,12 @@ router.put('/students/:id', async (req, res) => {
   }
 });
 
-/** DELETE /api/v1/admin/students/:id */
-/**
- * Delete one student, and their login account with them.
- *
- * The User row used to survive the delete, which left a real account in the
- * database holding a valid password hash and a valid refresh token for a person
- * who is no longer on roll. Nothing in the app could read or use it, and the
- * User Accounts screen still listed it, so the office was shown an account for a
- * student they had just deleted.
- *
- * The login is found through the `User.student` relation, so a student created
- * without a guardian contact (and therefore with no account) has nothing to remove. — created without a guardian
- * contact — simply has no row to remove). Deleting the user also drops its
- * refresh tokens, which cascade from the User row.
- */
-router.delete('/students/:id', async (req, res) => {
-  try {
-    // `User.student` is a relation, not a scalar FK, so the lookup filters on the
-    // related row rather than on a studentId column.
-    const user = await prisma.user.findFirst({
-      where: { student: { id: req.params.id } },
-      select: { id: true },
-    });
-    // The student first: if the delete is refused for dependent records, the
-    // account must survive too, or the office is left with an orphaned login.
-    await prisma.student.delete({ where: { id: req.params.id } });
-    if (user) await prisma.user.delete({ where: { id: user.id } });
-    return sendSuccess(res, { id: req.params.id, accountRemoved: Boolean(user) }, 'Student deleted');
-  } catch (err) {
-    if (err.code === 'P2025') return sendError(res, 'Student not found', 404, 'NOT_FOUND');
-    if (err.code === 'P2003') return sendError(res, 'Student has dependent records (attendance/marks/achievements)', 409, 'CONFLICT');
-    throw err;
-  }
-});
+/* A student is never deleted. The school's rule is that a child either passes
+   out or is given a transfer certificate, and the year's data stays exactly as
+   it is — so there is no DELETE /students/:id route here. Admission numbers can
+   only be "never reused" while the row they point at still exists, which a
+   hard delete would break. Editing a misspelt or misplaced row goes through
+   Edit Student, and a re-typed child is caught by the duplicate rule at entry. */
 
 /**
  * POST /api/v1/admin/students/:id/create-login — provision the login for a

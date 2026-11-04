@@ -35,7 +35,7 @@ test('every admin route rejects unauthenticated and non-admin callers', async ()
   assert.equal(denied.body.code, 'FORBIDDEN');
 });
 
-test('students: list, create, update, delete (full CRUD)', async () => {
+test('students: list, create, update (no delete route — a student is never deleted)', async () => {
   const list = await request(ctx.base, '/admin/students', { token: admin.accessToken });
   assert.equal(list.status, 200);
   const before = list.body.data.length;
@@ -66,11 +66,25 @@ test('students: list, create, update, delete (full CRUD)', async () => {
   assert.equal(updated.body.data.feeDues, 1234);
   assert.equal(updated.body.data.name, 'Test Student Updated');
 
+  /* A student is never deleted — the school's rule is pass-out or a transfer
+     certificate, and the year's data stays as it is. DELETE on this REAL, NEWLY
+     CREATED id must not remove the row. Testing with the id that was just made
+     (rather than an unknown one like 'stu-999') matters: an unregistered route
+     and an unknown id both answer 404, so an unknown id would prove nothing. */
   const del = await request(ctx.base, `/admin/students/${newId}`, { method: 'DELETE', token: admin.accessToken });
-  assert.equal(del.status, 200);
+  assert.equal(del.status, 404, 'the student delete route must be gone');
 
   const after = await request(ctx.base, '/admin/students', { token: admin.accessToken });
-  assert.equal(after.body.data.length, before, 'list restored after delete');
+  assert.equal(after.body.data.length, before + 1, 'the created student still exists');
+  assert.ok(
+    after.body.data.some((s) => s.id === newId),
+    'the exact row is still on the register — nothing else removed it either',
+  );
+
+  // Tidy up the row this test made — through Prisma, since no API route removes
+  // a student. Later tests count students.
+  const prisma = require('../src/services/prisma');
+  await prisma.student.delete({ where: { id: newId } });
 });
 
 test('students: create with invalid payload → 400 VALIDATION_ERROR', async () => {
@@ -84,7 +98,7 @@ test('students: create with invalid payload → 400 VALIDATION_ERROR', async () 
   assert.ok(res.body.errors.name, 'error targets the name field');
 });
 
-test('students: update/delete unknown id → 404', async () => {
+test('students: update unknown id → 404', async () => {
   // Guardian name and contact are required fields, so the payload carries them:
   // a 404 must still be reached — validation passing is what makes the missing
   // id the thing under test rather than the missing guardian.
@@ -94,6 +108,12 @@ test('students: update/delete unknown id → 404', async () => {
   };
   const upd = await request(ctx.base, '/admin/students/stu-999', { method: 'PUT', token: admin.accessToken, body: validBody });
   assert.equal(upd.status, 404);
+
+  /* DELETE /students/:id no longer exists. A DELETE here now 404s because the
+     route is unregistered — the same status an unknown id would give — so this
+     assertion can no longer distinguish "no such student" from "no such route".
+     It is kept for the status contract only; the routes-are-gone test above (on a
+     real, newly created id) is what actually proves the route was removed. */
   const del = await request(ctx.base, '/admin/students/stu-999', { method: 'DELETE', token: admin.accessToken });
   assert.equal(del.status, 404);
 });

@@ -63,8 +63,11 @@ before(async () => {
 });
 
 after(async () => {
+  const prisma = require('../src/services/prisma');
+  // The student DELETE route no longer exists, so cleanup removes rows through
+  // Prisma directly rather than silently 404ing through the API.
   for (const id of created.students) {
-    await request(base, `/admin/students/${id}`, { method: 'DELETE', token }).catch(() => {});
+    await prisma.student.delete({ where: { id } }).catch(() => {});
   }
   for (const id of created.classes) {
     await request(base, `/admin/classes/${id}`, { method: 'DELETE', token }).catch(() => {});

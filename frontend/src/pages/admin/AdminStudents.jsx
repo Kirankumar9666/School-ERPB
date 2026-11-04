@@ -31,7 +31,7 @@ const money = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
 
 /**
  * Admin Students — class-grouped overview with search, per-class member
- * management (add / edit / delete) and CSV/XLSX bulk admissions parsed
+ * management (add / edit) and CSV/XLSX bulk admissions parsed
  * and validated on the backend.
  */
 export default function AdminStudents() {
@@ -159,35 +159,8 @@ export default function AdminStudents() {
     setModal({ mode: 'edit', student: s });
   };
 
-  // Destructive-action confirmation (ConfirmModal replaces window.confirm)
-  const [confirm, setConfirm] = useState(null);
-  // The empty class awaiting delete confirmation. Kept apart from `confirm` so the
-  // class panel can stay open behind it.
+  // The empty class awaiting delete confirmation.
   const [deleteClass, setDeleteClass] = useState(null);
-
-  const handleDelete = (s) => {
-    setConfirm({
-      title: 'Delete Student',
-      message: `Delete student “${s.name}”? This cannot be undone.`,
-      onConfirm: async () => {
-        try {
-          await api.delete(`/admin/students/${s.id}`);
-          toast.success('Student deleted.');
-          const fresh = await load();
-          // Keep an open roster modal, but rebind it to the refreshed summary row
-          // (close it if the class no longer exists after the delete).
-          setModal((m) => {
-            if (m?.mode !== 'roster') return m;
-            const updated = fresh.classes.find((x) => x.key === m.cls.key);
-            return updated ? { ...m, cls: updated } : null;
-          });
-        } catch (err) {
-          toast.error(err.response?.data?.message || 'Delete failed.');
-        }
-        setConfirm(null);
-      },
-    });
-  };
 
   const toPayload = (f) => ({
     name: f.name.trim(),
@@ -513,13 +486,6 @@ export default function AdminStudents() {
                               <KeyRound size={14} />
                             </button>
                           )}
-                          <button
-                            className="btn btn-danger btn-sm"
-                            onClick={() => handleDelete(s)}
-                            aria-label={`Delete ${s.name}`}
-                          >
-                            <Trash size={14} />
-                          </button>
                         </div>
                       </td>
                     </tr>
@@ -614,19 +580,6 @@ export default function AdminStudents() {
             This class has no students and no records. Deleting it removes it from
             every class list. This cannot be undone.
           </p>
-        </ConfirmModal>
-      )}
-
-      {confirm && (
-        <ConfirmModal
-          title={confirm.title}
-          confirmLabel="Delete"
-          cancelLabel="Cancel"
-          tone="danger"
-          onClose={() => setConfirm(null)}
-          onConfirm={confirm.onConfirm}
-        >
-          <p>{confirm.message}</p>
         </ConfirmModal>
       )}
     </div>

@@ -13,6 +13,7 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { startServer, stopServer, login, request, auth } = require('./helpers');
+const prisma = require('../src/services/prisma');
 
 let server;
 let base;
@@ -90,10 +91,9 @@ test('a sibling with the same guardian and contact but a different name is allow
   });
   assert.equal(res.status, 201, JSON.stringify(res.body));
 
-  // Clean up: it is a real row now, and later tests count students.
-  assert.equal((await request(base, `/admin/students/${res.body.data.id}`, {
-    method: 'DELETE', token: admin.accessToken, raw: true,
-  })).status, 200);
+  // Clean up: it is a real row now, and later tests count students. The student
+  // DELETE route no longer exists, so the row is removed through Prisma directly.
+  await prisma.student.delete({ where: { id: res.body.data.id } });
 });
 
 test('the contact is compared on its last ten digits', async () => {
@@ -123,9 +123,7 @@ test('a different contact and a different name is a genuinely new student', asyn
     guardianContact: '9876500012',
   });
   assert.equal(res.status, 201, JSON.stringify(res.body));
-  await request(base, `/admin/students/${res.body.data.id}`, {
-    method: 'DELETE', token: admin.accessToken, raw: true,
-  });
+  await prisma.student.delete({ where: { id: res.body.data.id } });
 });
 
 /* ── Edit Student ───────────────────────────────────────────────────────────── */

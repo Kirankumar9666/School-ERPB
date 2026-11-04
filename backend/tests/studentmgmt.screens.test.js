@@ -1,6 +1,6 @@
 /**
  * Student Management screens — Create Class, Add Level, class delete, and the
- * student-login removal on delete.
+ * fact that a student is never deleted.
  *
  * ## DO NOT RUN THIS AGAINST THE LIVE DATABASE
  *
@@ -35,8 +35,12 @@ before(async () => {
 });
 
 after(async () => {
+  const prisma = require('../src/services/prisma');
+  // Cleanup removes rows the tests made. It used to go through the student
+  // DELETE route, which no longer exists — so it deletes through Prisma
+  // directly, the same way student.guardian.login.test.js tidies up.
   for (const id of created.students) {
-    await request(base, `/admin/students/${id}`, { method: 'DELETE', token }).catch(() => {});
+    await prisma.student.delete({ where: { id } }).catch(() => {});
   }
   for (const id of created.classes) {
     await request(base, `/admin/classes/${id}`, { method: 'DELETE', token }).catch(() => {});
@@ -169,41 +173,33 @@ test('a level that has classes cannot be deleted', async () => {
   assert.equal(res.body.code, 'LEVEL_HAS_CLASSES');
 });
 
-/* ── Student login on delete ───────────────────────────────────────────────── */
+/* ── A student is never deleted ───────────────────────────────────────────── */
 
-test('deleting a student removes their login account', async () => {
+/* These two used to be "deleting a student removes their login account" and "a
+   student with no login at all still deletes cleanly". There is no delete route
+   any more, so both collapse into the one fact that replaces them: the route is
+   gone, and a real student cannot be removed through the API by any route. */
+test('there is no route that deletes a student', async () => {
   const cls = (await get('/admin/classes')).body.data.find((c) => c.studentCount > 0);
   const made = await post('/admin/students', {
-    classId: cls.id, name: 'Login Probe One',
-    parentName: 'Login Probe One Guardian', guardianContact: '9800001234',
+    classId: cls.id, name: 'Never Delete Probe',
+    parentName: 'Never Delete Guardian', guardianContact: '9800001234',
   });
   assert.equal(made.status, 201, JSON.stringify(made.body));
+  const id = made.body.data.id;
+  created.students.push(id);
   assert.ok(made.body.data.account, 'the student must have a login');
 
-  const del = await request(base, `/admin/students/${made.body.data.id}`, { method: 'DELETE', token });
-  assert.equal(del.status, 200, JSON.stringify(del.body));
-  assert.equal(del.body.data.accountRemoved, true);
-});
+  /* DELETE the REAL id that was just created — not an unknown one. An
+     unregistered route and an unknown id both answer 404, so an unknown id
+     would pass for the wrong reason and prove nothing. */
+  const del = await request(base, `/admin/students/${id}`, { method: 'DELETE', token });
+  assert.equal(del.status, 404, JSON.stringify(del.body));
 
-test('a student with no login at all still deletes cleanly', async () => {
-  const cls = (await get('/admin/classes')).body.data.find((c) => c.studentCount > 0);
-  /* A legacy record with no guardian and no login: written straight to the
-     database exactly the way such a row exists in a real school (admitted
-     before guardian fields were required, or imported from a register without
-     them). Add Student can no longer produce one, so the delete path's handling
-     of an accountless student is exercised on the shape that actually remains. */
-  const prisma = require('../src/services/prisma');
-  const row = await prisma.student.create({
-    data: {
-      id: `stu-nologin-${Date.now()}`,
-      name: 'Login Probe Two',
-      classId: cls.id,
-    },
-  });
-  const enrollment = require('../src/services/enrollment');
-  await enrollment.syncLiveEnrollment(prisma, row.id);
-
-  const del = await request(base, `/admin/students/${row.id}`, { method: 'DELETE', token });
-  assert.equal(del.status, 200, JSON.stringify(del.body));
-  assert.equal(del.body.data.accountRemoved, false, 'a student with no login has no account to remove');
+  // And no other route removed the row either: it is still on the register, with
+  // its login account intact.
+  const list = await get('/admin/students');
+  const still = list.body.data.find((s) => s.id === id);
+  assert.ok(still, 'the student must still exist after the refused delete');
+  assert.ok(still.userId, 'the login account is still attached');
 });
